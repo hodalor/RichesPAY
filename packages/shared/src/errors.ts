@@ -5,7 +5,10 @@ export type ErrorCode =
   | "not_found"
   | "rate_limited"
   | "product_not_enabled"
-  | "insufficient_funds";
+  | "insufficient_funds"
+  | "forbidden"
+  | "mfa_required"
+  | "ip_not_allowed";
 
 export interface ApiErrorBody {
   code: ErrorCode;
@@ -30,7 +33,10 @@ const ERROR_CODES = new Set<ErrorCode>([
   "not_found",
   "rate_limited",
   "product_not_enabled",
-  "insufficient_funds"
+  "insufficient_funds",
+  "forbidden",
+  "mfa_required",
+  "ip_not_allowed"
 ]);
 
 export function isErrorCode(value: string): value is ErrorCode {

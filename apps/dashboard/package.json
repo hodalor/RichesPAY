@@ -13,6 +13,7 @@
   "dependencies": {
     "@richespay/shared": "workspace:*",
     "@richespay/ui": "workspace:*",
+    "@supabase/supabase-js": "^2.57.4",
     "@tanstack/react-query": "^5.89.0",
     "lucide-react": "^0.544.0",
     "react": "^19.1.1",

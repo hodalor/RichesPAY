@@ -7,6 +7,10 @@ import type { ActorType, DB, RpMode } from "./types";
 
 export type ScopedTransaction = Transaction<DB>;
 
+interface SystemScopeOptions {
+  audit?: boolean;
+}
+
 let defaultDatabase: AppDatabase | null = null;
 
 function getDefaultDatabase(): AppDatabase {
@@ -67,14 +71,20 @@ function buildSystemAuditInsert(reason: string, actorType: ActorType = "system")
 export async function runWithSystemScope<T>(
   database: AppDatabase,
   reason: string,
-  fn: (trx: ScopedTransaction) => Promise<T>
+  fn: (trx: ScopedTransaction) => Promise<T>,
+  options: SystemScopeOptions = {}
 ): Promise<T> {
   return database.transaction().execute(async (trx) => {
     await sql.raw("set local role richespay_system").execute(trx);
 
     const result = await fn(trx);
 
-    await trx.insertInto("audit_logs").values(buildSystemAuditInsert(reason)).execute();
+    if (options.audit !== false) {
+      await trx
+        .insertInto("audit_logs")
+        .values(buildSystemAuditInsert(reason))
+        .execute();
+    }
 
     return result;
   });
@@ -82,9 +92,10 @@ export async function runWithSystemScope<T>(
 
 export async function withSystemScope<T>(
   reason: string,
-  fn: (trx: ScopedTransaction) => Promise<T>
+  fn: (trx: ScopedTransaction) => Promise<T>,
+  options: SystemScopeOptions = {}
 ): Promise<T> {
-  return runWithSystemScope(getDefaultDatabase(), reason, fn);
+  return runWithSystemScope(getDefaultDatabase(), reason, fn, options);
 }
 
 // Repository rule: accept ScopedTransaction from withMerchantScope/withSystemScope,

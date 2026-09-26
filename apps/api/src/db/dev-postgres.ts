@@ -3,12 +3,41 @@ import { rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import EmbeddedPostgres from "embedded-postgres";
 
 export interface DevPostgresHandle {
   connectionString: string;
   stop: () => Promise<void>;
+}
+
+function isRetryableCleanupError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "EBUSY" || error.code === "ENOTEMPTY" || error.code === "EPERM")
+  );
+}
+
+async function removeDirectoryWithRetry(directory: string): Promise<void> {
+  const maxAttempts = 8;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await rm(directory, {
+        force: true,
+        recursive: true
+      });
+      return;
+    } catch (error) {
+      if (!isRetryableCleanupError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+
+      await delay(attempt * 150);
+    }
+  }
 }
 
 async function getAvailablePort(): Promise<number> {
@@ -53,15 +82,18 @@ export async function startDevPostgres(
   await postgres.start();
 
   const connectionString = `postgresql://postgres:postgres@127.0.0.1:${port}/postgres`;
+  let stopped = false;
 
   return {
     connectionString,
     stop: async () => {
+      if (stopped) {
+        return;
+      }
+
+      stopped = true;
       await postgres.stop();
-      await rm(databaseDir, {
-        force: true,
-        recursive: true
-      });
+      await removeDirectoryWithRetry(databaseDir);
     }
   };
 }

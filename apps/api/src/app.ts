@@ -13,7 +13,7 @@ import {
 import Fastify from "fastify";
 import IORedis from "ioredis";
 
-import { createApiErrorEnvelope } from "@richespay/shared";
+import { createApiErrorEnvelope, isErrorCode } from "@richespay/shared";
 
 import {
   createDatabase,
@@ -21,8 +21,11 @@ import {
   registerDatabase
 } from "./db";
 import type { AppEnv } from "./env";
+import { extractErrorCode, isApiRouteError } from "./lib/api-error";
 import { requestIdPlugin } from "./plugins/request-id";
 import { registerHealthRoutes } from "./routes/health";
+import { registerAdminRoutes } from "./routes/admin";
+import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerV1Routes } from "./routes/v1";
 
 function getValidationField(error: unknown): string | undefined {
@@ -100,6 +103,27 @@ export async function buildApp(env: AppEnv) {
     const errorMessage =
       error instanceof Error ? error.message : "Unexpected error";
 
+    if (isApiRouteError(error)) {
+      const errorBody: {
+        code: typeof error.code;
+        field?: string;
+        message: string;
+        request_id: string;
+      } = {
+        code: error.code,
+        message: error.message,
+        request_id: requestId
+      };
+
+      if (error.field !== undefined) {
+        errorBody.field = error.field;
+      }
+
+      return reply.status(error.statusCode).send(
+        createApiErrorEnvelope(errorBody)
+      );
+    }
+
     if (field) {
       return reply.status(400).send(
         createApiErrorEnvelope({
@@ -123,16 +147,20 @@ export async function buildApp(env: AppEnv) {
       request.log.error({ err: error }, "Unhandled request error");
     }
 
-    const code =
-      statusCode === 401
+    const explicitCode = extractErrorCode(error);
+    const code = explicitCode
+      ? explicitCode
+      : statusCode === 401
         ? "unauthorized"
-        : statusCode === 404
-          ? "not_found"
-          : "internal_error";
+        : statusCode === 403
+          ? "forbidden"
+          : statusCode === 404
+            ? "not_found"
+            : "internal_error";
 
     return reply.status(statusCode).send(
       createApiErrorEnvelope({
-        code,
+        code: isErrorCode(code) ? code : "internal_error",
         message: statusCode >= 500 ? "Internal server error" : errorMessage,
         request_id: requestId
       })
@@ -169,6 +197,8 @@ export async function buildApp(env: AppEnv) {
 
   await registerHealthRoutes(app);
   await app.register(registerV1Routes, { prefix: "/v1" });
+  await app.register(registerDashboardRoutes, { prefix: "/dashboard/v1" });
+  await app.register(registerAdminRoutes, { prefix: "/admin/v1" });
 
   return { app, db, dbPool, redis };
 }

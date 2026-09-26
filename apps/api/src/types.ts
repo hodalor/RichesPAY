@@ -9,8 +9,12 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type Redis from "ioredis";
 import type { Pool } from "pg";
 
+import type { DashboardMembershipContext } from "./auth/dashboard-access";
+import type { PlatformAdminContext } from "./auth/admin-access";
+import type { AuthenticatedSession } from "./auth/session";
 import type { AppEnv } from "./env";
-import type { AppDatabase } from "./db";
+import type { AppDatabase, ScopedTransaction } from "./db";
+import type { MerchantPermission } from "@richespay/shared";
 
 export type FastifyTypedInstance = FastifyInstance<
   RawServerDefault,
@@ -26,5 +30,16 @@ declare module "fastify" {
     db: AppDatabase;
     dbPool: Pool;
     redis: Redis;
+  }
+
+  interface FastifyRequest {
+    authenticatedSession: AuthenticatedSession | null;
+    assertDashboardPermission: (permission: MerchantPermission) => void;
+    dashboardMembership: DashboardMembershipContext | null;
+    dashboardPermissions: MerchantPermission[] | null;
+    platformAdmin: PlatformAdminContext | null;
+    withDashboardScope: <T>(
+      fn: (trx: ScopedTransaction) => Promise<T>
+    ) => Promise<T>;
   }
 }

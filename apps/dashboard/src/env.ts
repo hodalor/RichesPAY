@@ -1,4 +1,10 @@
-function readRequiredEnv(key: "VITE_API_BASE_URL" | "VITE_APP_NAME"): string {
+function readRequiredEnv(
+  key:
+    | "VITE_API_BASE_URL"
+    | "VITE_APP_NAME"
+    | "VITE_SUPABASE_URL"
+    | "VITE_SUPABASE_ANON_KEY"
+): string {
   const value = import.meta.env[key];
 
   if (!value) {
@@ -11,5 +17,6 @@ function readRequiredEnv(key: "VITE_API_BASE_URL" | "VITE_APP_NAME"): string {
 export const env = {
   apiBaseUrl: readRequiredEnv("VITE_API_BASE_URL"),
   appName: readRequiredEnv("VITE_APP_NAME"),
-  bearerToken: import.meta.env.VITE_BEARER_TOKEN ?? ""
+  supabaseAnonKey: readRequiredEnv("VITE_SUPABASE_ANON_KEY"),
+  supabaseUrl: readRequiredEnv("VITE_SUPABASE_URL")
 };

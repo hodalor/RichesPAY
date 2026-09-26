@@ -19,6 +19,11 @@ export class ApiError extends Error {
   }
 }
 
+export interface ApiRequestOptions extends RequestInit {
+  accessToken?: string | null;
+  merchantId?: string | null;
+}
+
 function isApiErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
   return (
     typeof value === "object" &&
@@ -31,7 +36,7 @@ function isApiErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
 
 export async function apiRequest<T>(
   path: string,
-  init: RequestInit = {}
+  init: ApiRequestOptions = {}
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
@@ -40,8 +45,12 @@ export async function apiRequest<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  if (env.bearerToken) {
-    headers.set("Authorization", `Bearer ${env.bearerToken}`);
+  if (init.accessToken) {
+    headers.set("Authorization", `Bearer ${init.accessToken}`);
+  }
+
+  if (init.merchantId) {
+    headers.set("X-Merchant-Id", init.merchantId);
   }
 
   const response = await fetch(new URL(path, env.apiBaseUrl), {

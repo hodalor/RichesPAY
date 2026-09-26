@@ -1,55 +1,470 @@
+import * as React from "react";
+import {
+  Link,
+  Navigate,
+  Outlet,
+  RouterProvider,
+  createBrowserRouter,
+  useLocation,
+  useNavigate
+} from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { type Session } from "@supabase/supabase-js";
+import { LockKeyhole, LogOut, ShieldCheck } from "lucide-react";
+import {
+  Button,
+  EmptyState,
+  Input,
+  ToastProvider,
+  useToast
+} from "@richespay/ui";
 
+import { ApiError, apiRequest } from "./api-client";
 import { env } from "./env";
+import { supabase } from "./supabase";
+
+interface AdminSessionData {
+  email: string | null;
+  role: "super_admin" | "compliance" | "operations" | "finance" | "support";
+  user_id: string;
+}
+
+interface AuthContextValue {
+  accessToken: string | null;
+  loading: boolean;
+  session: Session | null;
+  signOutEverywhere: () => Promise<void>;
+}
 
 const queryClient = new QueryClient();
+const adminIdleTimeoutMs = 30 * 60 * 1000;
+const lastActivityStorageKey = "richespay_admin_last_activity";
 
-function PlaceholderPage() {
+const AuthContext = React.createContext<AuthContextValue | null>(null);
+
+function useAdminAuth() {
+  const context = React.useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAdminAuth must be used inside AdminAuthProvider");
+  }
+
+  return context;
+}
+
+function AdminAuthProvider({ children }: { children: React.ReactNode }) {
+  const [session, setSession] = React.useState<Session | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    void supabase.auth.getSession().then(({ data }) => {
+      if (mounted) {
+        setSession(data.session);
+        setLoading(false);
+      }
+    });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    const markActivity = () => {
+      window.localStorage.setItem(lastActivityStorageKey, String(Date.now()));
+    };
+
+    const events: Array<keyof WindowEventMap> = [
+      "click",
+      "keydown",
+      "mousemove",
+      "scroll",
+      "touchstart"
+    ];
+
+    markActivity();
+
+    events.forEach((eventName) => {
+      window.addEventListener(eventName, markActivity, { passive: true });
+    });
+
+    const interval = window.setInterval(() => {
+      const lastActivity = Number(
+        window.localStorage.getItem(lastActivityStorageKey) ?? "0"
+      );
+
+      if (Date.now() - lastActivity > adminIdleTimeoutMs) {
+        void supabase.auth.signOut({ scope: "local" });
+      }
+    }, 30_000);
+
+    return () => {
+      events.forEach((eventName) => {
+        window.removeEventListener(eventName, markActivity);
+      });
+      window.clearInterval(interval);
+    };
+  }, [session]);
+
+  const value = React.useMemo<AuthContextValue>(
+    () => ({
+      accessToken: session?.access_token ?? null,
+      loading,
+      session,
+      signOutEverywhere: async () => {
+        await supabase.auth.signOut({ scope: "global" });
+      }
+    }),
+    [loading, session]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+function AdminAuthLayout({
+  children,
+  subtitle,
+  title
+}: {
+  children: React.ReactNode;
+  subtitle: string;
+  title: string;
+}) {
   return (
-    <main className="min-h-screen bg-white px-6 py-12 text-slate-900">
-      <div className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <span className="inline-flex rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand">
-          Admin back-office
-        </span>
-        <h1 className="mt-4 text-4xl font-semibold tracking-tight">
-          {env.appName}
-        </h1>
-        <p className="mt-3 max-w-2xl text-base text-slate-600">
-          The super-admin shell is ready. React Router, TanStack Query,
-          Tailwind, and the typed API client are set up with no business
-          features added yet.
-        </p>
-        <dl className="mt-8 grid gap-4 sm:grid-cols-3">
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <dt className="text-sm text-slate-500">API base URL</dt>
-            <dd className="mt-2 font-medium text-slate-900">{env.apiBaseUrl}</dd>
+    <main className="min-h-screen bg-surface-subtle">
+      <div className="mx-auto flex min-h-screen max-w-7xl flex-col md:flex-row">
+        <section className="flex w-full items-center justify-center px-6 py-10 md:w-1/2 md:px-10">
+          <div className="w-full max-w-md rounded-card border border-border bg-white p-8 shadow-soft">
+            <p className="text-sm font-medium uppercase tracking-[0.2em] text-brand">
+              Admin
+            </p>
+            <h1 className="mt-4 text-3xl font-semibold tracking-tight text-text">
+              {title}
+            </h1>
+            <p className="mt-3 text-sm text-text-secondary">{subtitle}</p>
+            <div className="mt-8">{children}</div>
           </div>
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <dt className="text-sm text-slate-500">Mode</dt>
-            <dd className="mt-2 font-medium text-slate-900">Admin app</dd>
+        </section>
+        <aside className="hidden w-1/2 items-center justify-center bg-brand-50 px-10 py-12 md:flex">
+          <div className="max-w-md space-y-6">
+            <div className="inline-flex items-center gap-3 rounded-full bg-white/80 px-4 py-2 text-sm font-medium text-brand shadow-softer">
+              <ShieldCheck className="size-4" />
+              {env.appName}
+            </div>
+            <h2 className="text-4xl font-semibold tracking-tight text-text">
+              AAL2 and approved IPs only.
+            </h2>
+            <p className="text-base text-text-secondary">
+              Every platform admin session is gated by TOTP and the admin IP allowlist before the back-office opens.
+            </p>
           </div>
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <dt className="text-sm text-slate-500">UI package</dt>
-            <dd className="mt-2 font-medium text-slate-900">@richespay/ui</dd>
-          </div>
-        </dl>
+        </aside>
       </div>
     </main>
+  );
+}
+
+function ProtectedRoute() {
+  const auth = useAdminAuth();
+  const location = useLocation();
+
+  if (auth.loading) {
+    return (
+      <AdminAuthLayout
+        subtitle="Checking your admin session."
+        title="One moment"
+      >
+        <div className="space-y-4">
+          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+        </div>
+      </AdminAuthLayout>
+    );
+  }
+
+  if (!auth.session) {
+    return <Navigate replace state={{ from: location.pathname }} to="/sign-in" />;
+  }
+
+  return <Outlet />;
+}
+
+function SignInPage() {
+  const { pushToast } = useToast();
+  const navigate = useNavigate();
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+
+  return (
+    <AdminAuthLayout
+      subtitle="Platform admins must complete password sign-in and TOTP before the admin session is accepted."
+      title="RichesPay Admin"
+    >
+      <form
+        className="space-y-4"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setLoading(true);
+
+          const { error } = await supabase.auth.signInWithPassword({
+            email,
+            password
+          });
+
+          setLoading(false);
+
+          if (error) {
+            pushToast({
+              description: error.message,
+              title: "Admin sign-in failed",
+              variant: "danger"
+            });
+            return;
+          }
+
+          navigate("/2fa", { replace: true });
+        }}
+      >
+        <Input
+          label="Email"
+          onChange={(event) => {
+            setEmail(event.target.value);
+          }}
+          type="email"
+          value={email}
+        />
+        <Input
+          label="Password"
+          onChange={(event) => {
+            setPassword(event.target.value);
+          }}
+          type="password"
+          value={password}
+        />
+        <Button className="w-full" loading={loading} type="submit" variant="primary">
+          Sign in
+        </Button>
+      </form>
+    </AdminAuthLayout>
+  );
+}
+
+function TwoFactorPage() {
+  const { pushToast } = useToast();
+  const auth = useAdminAuth();
+  const navigate = useNavigate();
+  const [code, setCode] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+
+  return (
+    <AdminAuthLayout
+      subtitle="Enter the authenticator code for your platform admin account."
+      title="Verify your admin session"
+    >
+      <div className="space-y-4">
+        <Input
+          label="Authentication code"
+          onChange={(event) => {
+            setCode(event.target.value);
+          }}
+          value={code}
+        />
+        <Button
+          className="w-full"
+          loading={loading}
+          onClick={async () => {
+            if (!auth.session) {
+              navigate("/sign-in", { replace: true });
+              return;
+            }
+
+            setLoading(true);
+
+            const { data, error: listError } = await supabase.auth.mfa.listFactors();
+            const factor = data?.totp[0];
+
+            if (listError || !factor) {
+              setLoading(false);
+              pushToast({
+                description: "This admin user does not have a TOTP factor enrolled yet.",
+                title: "2FA is missing",
+                variant: "danger"
+              });
+              return;
+            }
+
+            const { data: challenge, error: challengeError } =
+              await supabase.auth.mfa.challenge({ factorId: factor.id });
+
+            if (challengeError || !challenge) {
+              setLoading(false);
+              pushToast({
+                description:
+                  challengeError?.message ?? "Unable to challenge the admin factor",
+                title: "2FA challenge failed",
+                variant: "danger"
+              });
+              return;
+            }
+
+            const { error } = await supabase.auth.mfa.verify({
+              challengeId: challenge.id,
+              code,
+              factorId: factor.id
+            });
+
+            setLoading(false);
+
+            if (error) {
+              pushToast({
+                description: error.message,
+                title: "Verification failed",
+                variant: "danger"
+              });
+              return;
+            }
+
+            navigate("/app", { replace: true });
+          }}
+          variant="primary"
+        >
+          Verify code
+        </Button>
+      </div>
+    </AdminAuthLayout>
+  );
+}
+
+function AdminHomePage() {
+  const { pushToast } = useToast();
+  const auth = useAdminAuth();
+  const [sessionData, setSessionData] = React.useState<AdminSessionData | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    if (!auth.accessToken) {
+      setLoading(false);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const data = await apiRequest<AdminSessionData>("/admin/v1/session", {
+          accessToken: auth.accessToken
+        });
+        setSessionData(data);
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "mfa_required") {
+          window.location.assign("/2fa");
+          return;
+        }
+
+        pushToast({
+          description:
+            error instanceof ApiError ? error.message : "Unable to load admin session",
+          title: "Admin access denied",
+          variant: "danger"
+        });
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [auth.accessToken, pushToast]);
+
+  return (
+    <AdminAuthLayout
+      subtitle="This confirms the admin-only path is protected by AAL2 and the IP allowlist."
+      title="Admin session"
+    >
+      {loading ? (
+        <div className="space-y-4">
+          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+        </div>
+      ) : sessionData ? (
+        <div className="space-y-4">
+          <div className="rounded-card border border-border bg-surface-subtle p-4">
+            <p className="text-sm text-text-secondary">Signed in as</p>
+            <p className="mt-2 text-lg font-semibold text-text">
+              {sessionData.email ?? "Unknown email"}
+            </p>
+            <p className="mt-2 inline-flex rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand">
+              {sessionData.role}
+            </p>
+          </div>
+          <Button
+            className="w-full"
+            onClick={() => {
+              void auth.signOutEverywhere();
+            }}
+            variant="primary"
+          >
+            <LogOut className="size-4" />
+            Sign out everywhere
+          </Button>
+        </div>
+      ) : (
+        <EmptyState
+          description="This account did not pass the admin access checks."
+          icon={<LockKeyhole className="size-5" />}
+          title="Admin access unavailable"
+        />
+      )}
+      <div className="mt-5">
+        <Link className="text-sm text-brand hover:underline" to="/sign-in">
+          Back to sign in
+        </Link>
+      </div>
+    </AdminAuthLayout>
   );
 }
 
 const router = createBrowserRouter([
   {
     path: "/",
-    element: <PlaceholderPage />
+    element: <Navigate replace to="/sign-in" />
+  },
+  {
+    path: "/sign-in",
+    element: <SignInPage />
+  },
+  {
+    path: "/2fa",
+    element: <TwoFactorPage />
+  },
+  {
+    element: <ProtectedRoute />,
+    children: [
+      {
+        path: "/app",
+        element: <AdminHomePage />
+      }
+    ]
   }
 ]);
 
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <ToastProvider>
+        <AdminAuthProvider>
+          <RouterProvider router={router} />
+        </AdminAuthProvider>
+      </ToastProvider>
     </QueryClientProvider>
   );
 }
