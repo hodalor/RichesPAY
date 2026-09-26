@@ -1,12 +1,16 @@
 import { z } from "zod";
 
 import { adminAuthPlugin } from "../plugins/admin-auth";
+import { registerPricingAdminRoutes } from "../pricing/admin-routes";
+import { registerProviderAdminRoutes } from "../providers/admin-routes";
 
 import type { FastifyTypedInstance } from "../types";
 
 export async function registerAdminRoutes(app: FastifyTypedInstance) {
   await app.register(async (protectedApp) => {
     await protectedApp.register(adminAuthPlugin);
+    await registerPricingAdminRoutes(protectedApp);
+    await registerProviderAdminRoutes(protectedApp);
 
     protectedApp.get(
       "/session",

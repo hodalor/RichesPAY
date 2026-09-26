@@ -17,8 +17,13 @@ export const platformAdminRoles = [
   "support"
 ] as const;
 
+export const apiKeyKinds = ["secret", "public"] as const;
+export const apiKeyScopes = ["collections", "payouts", "sms", "read"] as const;
+
 export type MerchantRole = (typeof merchantRoles)[number];
 export type PlatformAdminRole = (typeof platformAdminRoles)[number];
+export type ApiKeyKind = (typeof apiKeyKinds)[number];
+export type ApiKeyScope = (typeof apiKeyScopes)[number];
 
 export const merchantPermissions = [
   "members.read",

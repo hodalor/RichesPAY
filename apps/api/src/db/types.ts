@@ -7,6 +7,26 @@ import type { ColumnType } from "kysely";
 
 export type ActorType = "admin" | "api_key" | "system" | "user";
 
+export type ApiKeyKind = "public" | "secret";
+
+export type ApiKeyScope = "collections" | "payouts" | "read" | "sms";
+
+export type ArrayType<T> = ArrayTypeImpl<T> extends (infer U)[]
+  ? U[]
+  : ArrayTypeImpl<T>;
+
+export type ArrayTypeImpl<T> = T extends ColumnType<infer S, infer I, infer U>
+  ? ColumnType<S[], I[], U[]>
+  : T[];
+
+export type ChannelCapability = "collect" | "payout" | "sms";
+
+export type ChannelHealth = "degraded" | "down" | "healthy";
+
+export type ChannelKind = "card" | "mobile_money" | "sms";
+
+export type ChannelStatus = "active" | "disabled" | "maintenance";
+
 export type FreezeAction = "freeze" | "unfreeze";
 
 export type FreezeType = "collections" | "payouts";
@@ -14,6 +34,8 @@ export type FreezeType = "collections" | "payouts";
 export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
+
+export type IdempotencyStatus = "completed" | "in_progress";
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
@@ -58,6 +80,39 @@ export interface AccountBalances {
   version: Generated<Int8>;
 }
 
+export interface ApiKeys {
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  expires_at: Timestamp | null;
+  id: string;
+  ip_allowlist: string[] | null;
+  key_hash: string;
+  kind: ApiKeyKind;
+  last_used_at: Timestamp | null;
+  last4: string;
+  merchant_id: string;
+  mode: RpMode;
+  name: string;
+  prefix: string;
+  revoked_at: Timestamp | null;
+  scopes: ArrayType<ApiKeyScope>;
+}
+
+export interface ApiRequestLogs {
+  api_key_id: string | null;
+  created_at: Generated<Timestamp>;
+  duration_ms: number;
+  ip: string | null;
+  merchant_id: string;
+  method: string;
+  mode: RpMode;
+  path: string;
+  request_body: Json | null;
+  request_id: string;
+  response_body: Json | null;
+  status_code: number;
+}
+
 export interface AuditLogs {
   action: string;
   actor_id: string;
@@ -80,6 +135,33 @@ export interface AuthUsers {
   id: string;
 }
 
+export interface ChannelHealthEvents {
+  channel_id: string;
+  created_at: Generated<Timestamp>;
+  detail: Json | null;
+  from_health: ChannelHealth | null;
+  id: string;
+  reason: string;
+  to_health: ChannelHealth;
+}
+
+export interface Channels {
+  capabilities: ArrayType<ChannelCapability>;
+  config: Generated<Json>;
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  credentials_encrypted: string;
+  health: Generated<ChannelHealth>;
+  id: string;
+  kind: ChannelKind;
+  mode: RpMode;
+  network: string | null;
+  priority: number;
+  provider_code: string;
+  status: Generated<ChannelStatus>;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface Countries {
   code: string;
   currency: string;
@@ -87,6 +169,17 @@ export interface Countries {
   enabled: Generated<boolean>;
   name: string;
   timezone: string;
+}
+
+export interface IdempotencyKeys {
+  created_at: Generated<Timestamp>;
+  key: string;
+  merchant_id: string;
+  mode: RpMode;
+  request_hash: string;
+  response_body: Json | null;
+  response_status: number | null;
+  status: IdempotencyStatus;
 }
 
 export interface Invitations {
@@ -170,6 +263,7 @@ export interface MerchantFreezeHistory {
 }
 
 export interface Merchants {
+  api_rate_limit_rps: Generated<number>;
   collections_freeze_reason: string | null;
   collections_frozen: Generated<boolean>;
   country_code: string;
@@ -187,6 +281,14 @@ export interface Merchants {
   trading_name: string | null;
   updated_at: Generated<Timestamp>;
   website: string | null;
+}
+
+export interface MsisdnPrefixes {
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  network: string;
+  prefix: string;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface PlatformAdmins {
@@ -214,11 +316,65 @@ export interface Profiles {
   user_id: string;
 }
 
+export interface ProviderApiLogs {
+  channel_id: string;
+  created_at: Generated<Timestamp>;
+  duration_ms: number;
+  id: string;
+  method: string;
+  path: string;
+  request_body: Json | null;
+  response_body: Json | null;
+  status: string;
+  status_code: number | null;
+}
+
+export interface ProviderCallbacks {
+  callback_hash: string;
+  channel_id: string;
+  headers: Json;
+  id: string;
+  processed_at: Timestamp | null;
+  processing_error: string | null;
+  raw_body: string;
+  received_at: Generated<Timestamp>;
+}
+
+export interface RoutingRules {
+  capability: ChannelCapability;
+  channel_ids: string[];
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  id: string;
+  kind: ChannelKind;
+  network: string | null;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface TransactionEvents {
+  created_at: Generated<Timestamp>;
+  from_status: string | null;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  provider_payload: Json | null;
+  provider_reference: string | null;
+  reason: string | null;
+  resource_id: string;
+  resource_type: string;
+  to_status: string;
+}
+
 export interface DB {
   account_balances: AccountBalances;
+  api_keys: ApiKeys;
+  api_request_logs: ApiRequestLogs;
   audit_logs: AuditLogs;
   "auth.users": AuthUsers;
+  channel_health_events: ChannelHealthEvents;
+  channels: Channels;
   countries: Countries;
+  idempotency_keys: IdempotencyKeys;
   invitations: Invitations;
   journal_entries: JournalEntries;
   kyb_documents: KybDocuments;
@@ -227,7 +383,12 @@ export interface DB {
   memberships: Memberships;
   merchant_freeze_history: MerchantFreezeHistory;
   merchants: Merchants;
+  msisdn_prefixes: MsisdnPrefixes;
   platform_admins: PlatformAdmins;
   postings: Postings;
   profiles: Profiles;
+  provider_api_logs: ProviderApiLogs;
+  provider_callbacks: ProviderCallbacks;
+  routing_rules: RoutingRules;
+  transaction_events: TransactionEvents;
 }

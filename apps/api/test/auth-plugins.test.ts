@@ -24,6 +24,7 @@ describe("auth plugins", () => {
     env = {
       ADMIN_IP_ALLOWLIST: ["10.0.0.0/8"],
       ADMIN_ORIGIN: "http://127.0.0.1:5174",
+      API_KEY_PEPPER: "public-api-pepper",
       APP_ENV: "test",
       CHECKOUT_ORIGIN: "http://127.0.0.1:5175",
       DASHBOARD_ORIGIN: "http://127.0.0.1:5173",
@@ -96,7 +97,8 @@ describe("auth plugins", () => {
     if (builtApp) {
       await Promise.allSettled([
         builtApp.app.close(),
-        builtApp.db.destroy()
+        builtApp.db.destroy(),
+        builtApp.dbPool.end()
       ]);
     }
 

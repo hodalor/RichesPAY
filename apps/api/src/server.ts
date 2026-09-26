@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import { buildApp } from "./app";
 import { loadEnv } from "./env";
+import { startProviderBackgroundServices } from "./providers/background-services";
 
 async function main() {
   let env;
@@ -16,6 +17,15 @@ async function main() {
   }
 
   const { app, db, redis } = await buildApp(env);
+  const providerServices =
+    env.APP_ENV === "test"
+      ? null
+      : startProviderBackgroundServices({
+          database: db,
+          encryptionKey: env.ENCRYPTION_KEY,
+          logger: app.log,
+          redisUrl: env.REDIS_URL
+        });
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
@@ -26,7 +36,12 @@ async function main() {
     shuttingDown = true;
     app.log.info({ signal }, "Shutting down RichesPay API");
 
-    await Promise.allSettled([app.close(), redis.quit(), db.destroy()]);
+    await Promise.allSettled([
+      app.close(),
+      providerServices?.stop(),
+      redis.quit(),
+      db.destroy()
+    ]);
     process.exit(0);
   };
 

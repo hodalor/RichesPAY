@@ -3,8 +3,12 @@ import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 
 import {
+  apiKeyKinds,
+  apiKeyScopes,
   newId,
   settlementCurrencyForCountry,
+  type ApiKeyKind,
+  type ApiKeyScope,
   type MerchantRole
 } from "@richespay/shared";
 
@@ -13,6 +17,12 @@ import { createSupabaseAnonClient } from "../auth/supabase-client";
 import { runWithSystemScope, type ScopedTransaction } from "../db";
 import { dashboardAuthPlugin } from "../plugins/dashboard-auth";
 import { ApiRouteError } from "../lib/api-error";
+import {
+  createPlainApiKey,
+  getApiKeyLast4,
+  getApiKeyPrefix,
+  hashApiKey
+} from "../public-api/api-keys";
 
 import type { FastifyTypedInstance } from "../types";
 
@@ -39,6 +49,14 @@ const inviteBodySchema = z.object({
 
 const updateRoleBodySchema = z.object({
   role: z.enum(["owner", "admin", "finance", "developer", "support", "viewer"])
+});
+
+const createApiKeyBodySchema = z.object({
+  expires_at: z.string().datetime().optional(),
+  ip_allowlist: z.array(z.string().min(1)).optional(),
+  kind: z.enum(apiKeyKinds),
+  name: z.string().min(1),
+  scopes: z.array(z.enum(apiKeyScopes)).min(1)
 });
 
 async function requireSession(
@@ -630,6 +648,326 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
         });
 
         return { data: { removed: true } };
+      }
+    );
+
+    protectedApp.get(
+      "/api-keys",
+      {
+        schema: {
+          response: {
+            200: z.object({
+              data: z.array(
+                z.object({
+                  created_at: z.string(),
+                  created_by: z.string(),
+                  expires_at: z.string().nullable(),
+                  id: z.string(),
+                  ip_allowlist: z.array(z.string()).nullable(),
+                  kind: z.enum(apiKeyKinds),
+                  last4: z.string(),
+                  last_used_at: z.string().nullable(),
+                  name: z.string(),
+                  prefix: z.string(),
+                  revoked_at: z.string().nullable(),
+                  scopes: z.array(z.enum(apiKeyScopes))
+                })
+              )
+            })
+          }
+        }
+      },
+      async (request) => {
+        request.assertDashboardPermission("api_keys.manage");
+
+        const keys = await request.withDashboardScope(async (trx) =>
+          trx
+            .selectFrom("api_keys")
+            .select([
+              "created_at",
+              "created_by",
+              "expires_at",
+              "id",
+              "ip_allowlist",
+              "kind",
+              "last4",
+              "last_used_at",
+              "name",
+              "prefix",
+              "revoked_at",
+              "scopes"
+            ])
+            .where("merchant_id", "=", request.dashboardMembership!.merchantId)
+            .where("mode", "=", request.dashboardMembership!.mode)
+            .orderBy("created_at desc")
+            .execute()
+        );
+
+        return {
+          data: keys.map((key) => ({
+            created_at: key.created_at.toISOString(),
+            created_by: key.created_by,
+            expires_at: key.expires_at?.toISOString() ?? null,
+            id: key.id,
+            ip_allowlist: key.ip_allowlist,
+            kind: key.kind as ApiKeyKind,
+            last4: key.last4,
+            last_used_at: key.last_used_at?.toISOString() ?? null,
+            name: key.name,
+            prefix: key.prefix,
+            revoked_at: key.revoked_at?.toISOString() ?? null,
+            scopes: key.scopes as ApiKeyScope[]
+          }))
+        };
+      }
+    );
+
+    protectedApp.post(
+      "/api-keys",
+      {
+        schema: {
+          body: createApiKeyBodySchema,
+          response: {
+            201: z.object({
+              data: z.object({
+                created_at: z.string(),
+                expires_at: z.string().nullable(),
+                id: z.string(),
+                ip_allowlist: z.array(z.string()).nullable(),
+                key: z.string(),
+                kind: z.enum(apiKeyKinds),
+                last4: z.string(),
+                name: z.string(),
+                prefix: z.string(),
+                scopes: z.array(z.enum(apiKeyScopes))
+              })
+            })
+          }
+        }
+      },
+      async (request, reply) => {
+        request.assertDashboardPermission("api_keys.manage");
+        const body = createApiKeyBodySchema.parse(request.body);
+        const plainKey = createPlainApiKey(request.dashboardMembership!.mode, body.kind);
+
+        const createdKey = await request.withDashboardScope(async (trx) => {
+          const createdAt = new Date();
+          const expiresAt = body.expires_at ? new Date(body.expires_at) : null;
+
+          return trx
+            .insertInto("api_keys")
+            .values({
+              created_at: createdAt,
+              created_by: request.dashboardMembership!.userId,
+              expires_at: expiresAt,
+              id: newId("key_"),
+              ip_allowlist: body.ip_allowlist ?? null,
+              key_hash: hashApiKey(plainKey, app.appEnv.API_KEY_PEPPER),
+              kind: body.kind,
+              last4: getApiKeyLast4(plainKey),
+              merchant_id: request.dashboardMembership!.merchantId,
+              mode: request.dashboardMembership!.mode,
+              name: body.name,
+              prefix: getApiKeyPrefix(plainKey),
+              revoked_at: null,
+              scopes: body.scopes
+            })
+            .returning([
+              "created_at",
+              "expires_at",
+              "id",
+              "ip_allowlist",
+              "kind",
+              "last4",
+              "name",
+              "prefix",
+              "scopes"
+            ])
+            .executeTakeFirstOrThrow();
+        });
+
+        return reply.status(201).send({
+          data: {
+            created_at: createdKey.created_at.toISOString(),
+            expires_at: createdKey.expires_at?.toISOString() ?? null,
+            id: createdKey.id,
+            ip_allowlist: createdKey.ip_allowlist,
+            key: plainKey,
+            kind: createdKey.kind as ApiKeyKind,
+            last4: createdKey.last4,
+            name: createdKey.name,
+            prefix: createdKey.prefix,
+            scopes: createdKey.scopes as ApiKeyScope[]
+          }
+        });
+      }
+    );
+
+    protectedApp.post(
+      "/api-keys/:apiKeyId/roll",
+      {
+        schema: {
+          params: z.object({
+            apiKeyId: z.string().min(1)
+          }),
+          response: {
+            201: z.object({
+              data: z.object({
+                expires_at: z.string().nullable(),
+                id: z.string(),
+                key: z.string(),
+                last4: z.string(),
+                prefix: z.string(),
+                previous_key_expires_at: z.string(),
+                scopes: z.array(z.enum(apiKeyScopes))
+              })
+            })
+          }
+        }
+      },
+      async (request, reply) => {
+        request.assertDashboardPermission("api_keys.manage");
+        const { apiKeyId } = request.params as { apiKeyId: string };
+        const plainKey = createPlainApiKey(request.dashboardMembership!.mode, "secret");
+
+        const rolledKey = await request.withDashboardScope(async (trx) => {
+          const existing = await trx
+            .selectFrom("api_keys")
+            .selectAll()
+            .where("id", "=", apiKeyId)
+            .where("merchant_id", "=", request.dashboardMembership!.merchantId)
+            .where("mode", "=", request.dashboardMembership!.mode)
+            .executeTakeFirst();
+
+          if (!existing) {
+            throw new ApiRouteError({
+              code: "not_found",
+              message: "API key not found",
+              statusCode: 404
+            });
+          }
+
+          if (existing.kind !== "secret") {
+            throw new ApiRouteError({
+              code: "validation_error",
+              field: "apiKeyId",
+              message: "Only secret keys can be rolled",
+              statusCode: 400
+            });
+          }
+
+          if (existing.revoked_at) {
+            throw new ApiRouteError({
+              code: "validation_error",
+              field: "apiKeyId",
+              message: "Revoked keys cannot be rolled",
+              statusCode: 400
+            });
+          }
+
+          const graceExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          const previousKeyExpiresAt = existing.expires_at && existing.expires_at < graceExpiry
+            ? existing.expires_at
+            : graceExpiry;
+
+          await trx
+            .updateTable("api_keys")
+            .set({
+              expires_at: previousKeyExpiresAt
+            })
+            .where("id", "=", existing.id)
+            .execute();
+
+          const created = await trx
+            .insertInto("api_keys")
+            .values({
+              created_by: request.dashboardMembership!.userId,
+              expires_at: existing.expires_at,
+              id: newId("key_"),
+              ip_allowlist: existing.ip_allowlist,
+              key_hash: hashApiKey(plainKey, app.appEnv.API_KEY_PEPPER),
+              kind: existing.kind,
+              last4: getApiKeyLast4(plainKey),
+              merchant_id: existing.merchant_id,
+              mode: existing.mode,
+              name: existing.name,
+              prefix: getApiKeyPrefix(plainKey),
+              revoked_at: null,
+              scopes: existing.scopes
+            })
+            .returning(["expires_at", "id", "last4", "prefix", "scopes"])
+            .executeTakeFirstOrThrow();
+
+          return {
+            ...created,
+            previousKeyExpiresAt
+          };
+        });
+
+        return reply.status(201).send({
+          data: {
+            expires_at: rolledKey.expires_at?.toISOString() ?? null,
+            id: rolledKey.id,
+            key: plainKey,
+            last4: rolledKey.last4,
+            prefix: rolledKey.prefix,
+            previous_key_expires_at: rolledKey.previousKeyExpiresAt.toISOString(),
+            scopes: rolledKey.scopes as ApiKeyScope[]
+          }
+        });
+      }
+    );
+
+    protectedApp.post(
+      "/api-keys/:apiKeyId/revoke",
+      {
+        schema: {
+          params: z.object({
+            apiKeyId: z.string().min(1)
+          }),
+          response: {
+            200: z.object({
+              data: z.object({
+                revoked: z.literal(true),
+                revoked_at: z.string()
+              })
+            })
+          }
+        }
+      },
+      async (request) => {
+        request.assertDashboardPermission("api_keys.manage");
+        const { apiKeyId } = request.params as { apiKeyId: string };
+
+        const revokedAt = await request.withDashboardScope(async (trx) => {
+          const updated = await trx
+            .updateTable("api_keys")
+            .set({
+              revoked_at: new Date()
+            })
+            .where("id", "=", apiKeyId)
+            .where("merchant_id", "=", request.dashboardMembership!.merchantId)
+            .where("mode", "=", request.dashboardMembership!.mode)
+            .returning("revoked_at")
+            .executeTakeFirst();
+
+          if (!updated?.revoked_at) {
+            throw new ApiRouteError({
+              code: "not_found",
+              message: "API key not found",
+              statusCode: 404
+            });
+          }
+
+          return updated.revoked_at;
+        });
+
+        return {
+          data: {
+            revoked: true,
+            revoked_at: revokedAt.toISOString()
+          }
+        };
       }
     );
   });

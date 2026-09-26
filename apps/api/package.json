@@ -18,6 +18,8 @@
     "@fastify/swagger": "^9.5.1",
     "@richespay/shared": "workspace:*",
     "@supabase/supabase-js": "^2.57.4",
+    "bullmq": "^5.58.5",
+    "decimal.js": "^10.5.0",
     "dotenv": "^17.2.2",
     "fastify": "^5.6.0",
     "fastify-plugin": "^5.0.1",
@@ -26,6 +28,7 @@
     "ioredis": "^5.8.1",
     "jose": "^6.1.0",
     "kysely": "^0.28.7",
+    "libphonenumber-js": "^1.12.24",
     "pg": "^8.16.3",
     "zod": "^4.1.11"
   },

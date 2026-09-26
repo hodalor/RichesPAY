@@ -21,9 +21,9 @@ function isRetryableCleanupError(error: unknown): error is NodeJS.ErrnoException
 }
 
 async function removeDirectoryWithRetry(directory: string): Promise<void> {
-  const maxAttempts = 8;
+  const retryDelaysMs = [100, 150, 200, 250, 300, 400, 500, 750, 1000, 1000];
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  for (let attempt = 0; attempt < retryDelaysMs.length; attempt += 1) {
     try {
       await rm(directory, {
         force: true,
@@ -31,11 +31,15 @@ async function removeDirectoryWithRetry(directory: string): Promise<void> {
       });
       return;
     } catch (error) {
-      if (!isRetryableCleanupError(error) || attempt === maxAttempts) {
+      if (!isRetryableCleanupError(error)) {
         throw error;
       }
 
-      await delay(attempt * 150);
+      if (attempt === retryDelaysMs.length - 1) {
+        return;
+      }
+
+      await delay(retryDelaysMs[attempt]);
     }
   }
 }
@@ -73,7 +77,7 @@ export async function startDevPostgres(
     authMethod: "password",
     databaseDir,
     password: "postgres",
-    persistent: false,
+    persistent: true,
     port,
     user: "postgres"
   });
@@ -93,6 +97,7 @@ export async function startDevPostgres(
 
       stopped = true;
       await postgres.stop();
+      await delay(500);
       await removeDirectoryWithRetry(databaseDir);
     }
   };

@@ -25,6 +25,7 @@ import { extractErrorCode, isApiRouteError } from "./lib/api-error";
 import { requestIdPlugin } from "./plugins/request-id";
 import { registerHealthRoutes } from "./routes/health";
 import { registerAdminRoutes } from "./routes/admin";
+import { registerCallbackRoutes } from "./routes/callbacks";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerV1Routes } from "./routes/v1";
 
@@ -196,6 +197,7 @@ export async function buildApp(env: AppEnv) {
   });
 
   await registerHealthRoutes(app);
+  await app.register(registerCallbackRoutes, { prefix: "/callbacks" });
   await app.register(registerV1Routes, { prefix: "/v1" });
   await app.register(registerDashboardRoutes, { prefix: "/dashboard/v1" });
   await app.register(registerAdminRoutes, { prefix: "/admin/v1" });

@@ -83,8 +83,11 @@ describe("merchant scope isolation", () => {
   }, 120000);
 
   afterAll(async () => {
-    if (database) {
-      await database.destroy();
+    if (database || pool) {
+      await Promise.allSettled([
+        database?.destroy(),
+        pool?.end()
+      ]);
     }
 
     if (devPostgres) {

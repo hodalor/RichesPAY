@@ -14,7 +14,10 @@ import type { PlatformAdminContext } from "./auth/admin-access";
 import type { AuthenticatedSession } from "./auth/session";
 import type { AppEnv } from "./env";
 import type { AppDatabase, ScopedTransaction } from "./db";
-import type { MerchantPermission } from "@richespay/shared";
+import type { IdempotencyState } from "./public-api/idempotency";
+import type { PublicApiKeyContext } from "./public-api/auth";
+import type { Json } from "./db/types";
+import type { ApiKeyScope, MerchantPermission } from "@richespay/shared";
 
 export type FastifyTypedInstance = FastifyInstance<
   RawServerDefault,
@@ -37,8 +40,15 @@ declare module "fastify" {
     assertDashboardPermission: (permission: MerchantPermission) => void;
     dashboardMembership: DashboardMembershipContext | null;
     dashboardPermissions: MerchantPermission[] | null;
+    idempotencyState: IdempotencyState | null;
     platformAdmin: PlatformAdminContext | null;
+    publicApiKey: PublicApiKeyContext | null;
+    publicApiResponseBody: Json | null;
+    assertApiKeyScope: (scope: ApiKeyScope) => void;
     withDashboardScope: <T>(
+      fn: (trx: ScopedTransaction) => Promise<T>
+    ) => Promise<T>;
+    withPublicApiScope: <T>(
       fn: (trx: ScopedTransaction) => Promise<T>
     ) => Promise<T>;
   }
