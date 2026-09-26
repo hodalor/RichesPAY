@@ -1,11 +1,12 @@
 @import url("https://rsms.me/inter/inter.css");
+@import "@richespay/ui/styles.css";
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color: #0f172a;
+  color: rgb(var(--rp-text-primary));
   font-family: "Inter", system-ui, sans-serif;
   font-synthesis: none;
   font-variant-numeric: tabular-nums;
@@ -14,6 +15,7 @@
 
 body {
   margin: 0;
+  min-width: 320px;
 }
 
 * {

@@ -1,8 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
-import { UI_PACKAGE_NAME } from "@richespay/ui";
-
 import { env } from "./env";
 
 const queryClient = new QueryClient();
@@ -11,7 +9,7 @@ function PlaceholderPage() {
   return (
     <main className="min-h-screen bg-white px-6 py-12 text-slate-900">
       <div className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <span className="inline-flex rounded-full bg-brand-soft px-3 py-1 text-sm font-medium text-brand">
+        <span className="inline-flex rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand">
           Admin back-office
         </span>
         <h1 className="mt-4 text-4xl font-semibold tracking-tight">
@@ -33,7 +31,7 @@ function PlaceholderPage() {
           </div>
           <div className="rounded-2xl border border-slate-200 p-4">
             <dt className="text-sm text-slate-500">UI package</dt>
-            <dd className="mt-2 font-medium text-slate-900">{UI_PACKAGE_NAME}</dd>
+            <dd className="mt-2 font-medium text-slate-900">@richespay/ui</dd>
           </div>
         </dl>
       </div>

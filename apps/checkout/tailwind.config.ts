@@ -1,19 +1,8 @@
 import type { Config } from "tailwindcss";
+import richesPayTailwindPreset from "@richespay/ui/tailwind-preset";
 
 export default {
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  theme: {
-    extend: {
-      colors: {
-        brand: {
-          DEFAULT: "#F97316",
-          soft: "#FFEDD5"
-        }
-      },
-      fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"]
-      }
-    }
-  },
+  content: ["./index.html", "./src/**/*.{ts,tsx}", "../../packages/ui/src/**/*.{ts,tsx}"],
+  presets: [richesPayTailwindPreset],
   plugins: []
 } satisfies Config;

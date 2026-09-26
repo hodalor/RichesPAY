@@ -1,1 +1,3 @@
-export const UI_PACKAGE_NAME = "@richespay/ui";
+export * from "./components";
+export { cn } from "./lib/utils";
+export { default as richesPayTailwindPreset } from "./tailwind-preset";
