@@ -26,7 +26,7 @@ async function main() {
     shuttingDown = true;
     app.log.info({ signal }, "Shutting down RichesPay API");
 
-    await Promise.allSettled([app.close(), redis.quit(), db.end()]);
+    await Promise.allSettled([app.close(), redis.quit(), db.destroy()]);
     process.exit(0);
   };
 

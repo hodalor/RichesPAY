@@ -89,8 +89,8 @@ const pageSize = 10;
 function buildTransactions(): TransactionRow[] {
   return Array.from({ length: 50 }, (_, index) => {
     const sequence = index + 1;
-    const status = statuses[index % statuses.length];
-    const channel = channels[index % channels.length];
+    const status = statuses[index % statuses.length]!;
+    const channel = channels[index % channels.length]!;
     const createdAt = new Date(
       Date.UTC(2026, 8, 26 - (index % 28), 8 + (index % 12), (index * 7) % 60)
     ).toISOString();
@@ -217,7 +217,12 @@ export function UIKitPage() {
       return result;
     }
 
-    const [{ desc, id }] = sorting;
+    const firstSort = sorting[0];
+    if (!firstSort) {
+      return result;
+    }
+
+    const { desc, id } = firstSort;
     return [...result].sort((left, right) => {
       let comparison = 0;
 
@@ -255,14 +260,24 @@ export function UIKitPage() {
   const pageInfo = React.useMemo<DataTablePageInfo>(() => {
     const start = pageIndex * pageSize;
     const end = start + pageSize;
-
-    return {
-      endCursor: pagedTransactions.at(-1)?.id,
+    const nextPageInfo: DataTablePageInfo = {
       hasNextPage: end < filteredTransactions.length,
       hasPreviousPage: pageIndex > 0,
-      limit: pageSize,
-      startCursor: pagedTransactions[0]?.id
+      limit: pageSize
     };
+
+    const firstId = pagedTransactions[0]?.id;
+    const lastId = pagedTransactions.at(-1)?.id;
+
+    if (firstId !== undefined) {
+      nextPageInfo.startCursor = firstId;
+    }
+
+    if (lastId !== undefined) {
+      nextPageInfo.endCursor = lastId;
+    }
+
+    return nextPageInfo;
   }, [filteredTransactions.length, pageIndex, pagedTransactions]);
 
   const totals = React.useMemo(() => {

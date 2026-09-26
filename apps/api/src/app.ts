@@ -12,10 +12,14 @@ import {
 } from "fastify-type-provider-zod";
 import Fastify from "fastify";
 import IORedis from "ioredis";
-import { Pool } from "pg";
 
 import { createApiErrorEnvelope } from "@richespay/shared";
 
+import {
+  createDatabase,
+  createDatabasePool,
+  registerDatabase
+} from "./db";
 import type { AppEnv } from "./env";
 import { requestIdPlugin } from "./plugins/request-id";
 import { registerHealthRoutes } from "./routes/health";
@@ -50,9 +54,9 @@ export async function buildApp(env: AppEnv) {
     maxRetriesPerRequest: 1
   });
 
-  const db = new Pool({
-    connectionString: env.DATABASE_URL
-  });
+  const dbPool = createDatabasePool(env.DATABASE_URL);
+  const db = createDatabase(dbPool);
+  registerDatabase(db);
 
   const app = Fastify({
     genReqId: (request) => {
@@ -87,6 +91,7 @@ export async function buildApp(env: AppEnv) {
 
   app.decorate("appEnv", env);
   app.decorate("db", db);
+  app.decorate("dbPool", dbPool);
   app.decorate("redis", redis);
 
   app.setErrorHandler(async (error, request, reply) => {
@@ -165,5 +170,5 @@ export async function buildApp(env: AppEnv) {
   await registerHealthRoutes(app);
   await app.register(registerV1Routes, { prefix: "/v1" });
 
-  return { app, db, redis };
+  return { app, db, dbPool, redis };
 }

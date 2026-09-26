@@ -22,6 +22,7 @@ import {
   type ColumnDef,
   type RowData,
   type SortingState,
+  type TableOptions,
   flexRender,
   getCoreRowModel,
   useReactTable
@@ -152,7 +153,7 @@ export interface SelectProps {
   onValueChange?: (value: string) => void;
   options: readonly SelectOption[];
   placeholder?: string;
-  value?: string;
+  value?: string | undefined;
 }
 
 export function Select({
@@ -162,12 +163,25 @@ export function Select({
   placeholder = "Select option",
   value
 }: SelectProps) {
+  const rootProps: {
+    onValueChange?: (value: string) => void;
+    value?: string;
+  } = {};
+
+  if (onValueChange) {
+    rootProps.onValueChange = onValueChange;
+  }
+
+  if (value !== undefined) {
+    rootProps.value = value;
+  }
+
   return (
     <label className="flex min-w-[180px] flex-col gap-2 text-sm">
       {label ? (
         <span className="font-medium text-text-secondary">{label}</span>
       ) : null}
-      <RadixSelect.Root onValueChange={onValueChange} value={value}>
+      <RadixSelect.Root {...rootProps}>
         <RadixSelect.Trigger className="inline-flex h-11 items-center justify-between gap-3 rounded-input border border-border bg-surface px-3 text-left text-sm text-text shadow-softer outline-none transition focus:ring-4 focus:ring-brand/10">
           <RadixSelect.Value placeholder={placeholder} />
           <RadixSelect.Icon className="text-text-muted">
@@ -207,16 +221,20 @@ export interface TabsItem {
 }
 
 export interface TabsProps {
-  defaultValue?: string;
+  defaultValue?: string | undefined;
   items: readonly TabsItem[];
 }
 
 export function Tabs({ defaultValue, items }: TabsProps) {
+  const resolvedDefaultValue = defaultValue ?? items[0]?.value;
+  const rootProps: { defaultValue?: string } = {};
+
+  if (resolvedDefaultValue !== undefined) {
+    rootProps.defaultValue = resolvedDefaultValue;
+  }
+
   return (
-    <RadixTabs.Root
-      className="flex flex-col gap-4"
-      defaultValue={defaultValue ?? items[0]?.value}
-    >
+    <RadixTabs.Root className="flex flex-col gap-4" {...rootProps}>
       <RadixTabs.List className="inline-flex w-fit rounded-card border border-border bg-surface p-1">
         {items.map((item) => (
           <RadixTabs.Trigger
@@ -399,9 +417,9 @@ export function SummaryCardGrid({
 }
 
 export interface DateRangeValue {
-  endDate?: string;
+  endDate?: string | undefined;
   preset: "today" | "seven_days" | "thirty_days" | "this_month" | "custom";
-  startDate?: string;
+  startDate?: string | undefined;
 }
 
 export interface DateRangePickerProps {
@@ -418,6 +436,24 @@ const dateRangeOptions: readonly SelectOption[] = [
   { label: "Custom", value: "custom" }
 ] as const;
 
+function createDateRangeValue(
+  preset: DateRangeValue["preset"],
+  startDate?: string,
+  endDate?: string
+): DateRangeValue {
+  const nextValue: DateRangeValue = { preset };
+
+  if (startDate !== undefined) {
+    nextValue.startDate = startDate;
+  }
+
+  if (endDate !== undefined) {
+    nextValue.endDate = endDate;
+  }
+
+  return nextValue;
+}
+
 export function DateRangePicker({
   label = "Date range",
   onChange,
@@ -429,11 +465,13 @@ export function DateRangePicker({
       <div className="space-y-2">
         <Select
           onValueChange={(nextPreset) =>
-            onChange({
-              endDate: value.endDate,
-              preset: nextPreset as DateRangeValue["preset"],
-              startDate: value.startDate
-            })
+            onChange(
+              createDateRangeValue(
+                nextPreset as DateRangeValue["preset"],
+                value.startDate,
+                value.endDate
+              )
+            )
           }
           options={dateRangeOptions}
           value={value.preset}
@@ -565,7 +603,7 @@ export function MoneyText({
 }
 
 interface ToastState {
-  description?: string;
+  description?: string | undefined;
   id: string;
   open: boolean;
   title: string;
@@ -602,7 +640,7 @@ function toastVariantStyles(variant: ToastVariant) {
 }
 
 export interface ToastProps {
-  description?: string;
+  description?: string | undefined;
   onOpenChange: (open: boolean) => void;
   open: boolean;
   title: string;
@@ -641,15 +679,20 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const pushToast = React.useCallback(
     ({ description, title, variant }: Omit<ToastState, "id" | "open">) => {
       const id = crypto.randomUUID();
+      const nextToast: ToastState = {
+        id,
+        open: true,
+        title,
+        variant
+      };
+
+      if (description !== undefined) {
+        nextToast.description = description;
+      }
+
       setToasts((current) => [
         ...current,
-        {
-          description,
-          id,
-          open: true,
-          title,
-          variant
-        }
+        nextToast
       ]);
     },
     []
@@ -717,11 +760,11 @@ export function CopyField({ label, value }: CopyFieldProps) {
 
 interface BaseLayerProps {
   children: React.ReactNode;
-  description?: string;
-  onOpenChange?: (open: boolean) => void;
-  open?: boolean;
+  description?: string | undefined;
+  onOpenChange?: ((open: boolean) => void) | undefined;
+  open?: boolean | undefined;
   title: string;
-  trigger?: React.ReactNode;
+  trigger?: React.ReactNode | undefined;
 }
 
 function dialogFrame({
@@ -751,8 +794,21 @@ export function Modal({
   title,
   trigger
 }: BaseLayerProps) {
+  const rootProps: {
+    onOpenChange?: (open: boolean) => void;
+    open?: boolean;
+  } = {};
+
+  if (onOpenChange) {
+    rootProps.onOpenChange = onOpenChange;
+  }
+
+  if (open !== undefined) {
+    rootProps.open = open;
+  }
+
   return (
-    <Dialog.Root onOpenChange={onOpenChange} open={open}>
+    <Dialog.Root {...rootProps}>
       {trigger ? <Dialog.Trigger asChild>{trigger}</Dialog.Trigger> : null}
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-text/30 backdrop-blur-sm" />
@@ -795,8 +851,21 @@ export function Drawer({
   title,
   trigger
 }: BaseLayerProps) {
+  const rootProps: {
+    onOpenChange?: (open: boolean) => void;
+    open?: boolean;
+  } = {};
+
+  if (onOpenChange) {
+    rootProps.onOpenChange = onOpenChange;
+  }
+
+  if (open !== undefined) {
+    rootProps.open = open;
+  }
+
   return (
-    <Dialog.Root onOpenChange={onOpenChange} open={open}>
+    <Dialog.Root {...rootProps}>
       {trigger ? <Dialog.Trigger asChild>{trigger}</Dialog.Trigger> : null}
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-text/20 backdrop-blur-sm" />
@@ -925,13 +994,13 @@ export function AppShell({
   const [collapsed, setCollapsed] = React.useState(false);
 
   return (
-    <div className="min-h-screen bg-surface-subtle text-text">
+    <div className="min-h-screen overflow-x-hidden bg-surface-subtle text-text">
       {mode === "test" ? (
         <div className="border-b border-brand-200 bg-brand-50 px-4 py-2 text-center text-xs font-medium text-brand md:px-6">
           Test mode - no real money moves
         </div>
       ) : null}
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen min-w-0">
         <aside
           className={cn(
             "fixed inset-y-0 left-0 z-30 flex w-72 flex-col border-r border-border bg-surface px-4 py-5 transition md:sticky",
@@ -998,7 +1067,7 @@ export function AppShell({
             </div>
           </div>
         </aside>
-        <div className="flex min-h-screen flex-1 flex-col">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 border-b border-border bg-surface/95 backdrop-blur">
             <div className="flex items-center justify-between gap-4 px-4 py-4 md:px-6">
               <div className="flex items-center gap-3">
@@ -1019,7 +1088,9 @@ export function AppShell({
               <div>{topBarContent}</div>
             </div>
           </header>
-          <main className="flex-1 px-4 py-6 md:px-6 md:py-8">{children}</main>
+          <main className="min-w-0 flex-1 px-4 py-6 md:px-6 md:py-8">
+            {children}
+          </main>
         </div>
       </div>
       {sidebarOpen ? (
@@ -1037,11 +1108,11 @@ export function AppShell({
 }
 
 export interface DataTablePageInfo {
-  endCursor?: string;
+  endCursor?: string | undefined;
   hasNextPage: boolean;
   hasPreviousPage: boolean;
   limit: number;
-  startCursor?: string;
+  startCursor?: string | undefined;
 }
 
 export interface DataTableProps<TData extends RowData> {
@@ -1073,11 +1144,10 @@ export function DataTable<TData extends RowData>({
   sorting = [],
   onSortingChange
 }: DataTableProps<TData>) {
-  const table = useReactTable({
+  const tableOptions: TableOptions<TData> = {
     columns,
     data,
     getCoreRowModel: getCoreRowModel(),
-    getRowId: rowId,
     manualPagination: true,
     manualSorting: true,
     onSortingChange: (updater) => {
@@ -1092,7 +1162,13 @@ export function DataTable<TData extends RowData>({
     state: {
       sorting
     }
-  });
+  };
+
+  if (rowId) {
+    tableOptions.getRowId = rowId;
+  }
+
+  const table = useReactTable(tableOptions);
 
   return (
     <section className="overflow-hidden rounded-card border border-border bg-surface shadow-softer">

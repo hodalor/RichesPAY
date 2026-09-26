@@ -1,6 +1,6 @@
 import type { Config } from "tailwindcss";
 
-export const richesPayTailwindPreset: Config = {
+export const richesPayTailwindPreset = {
   theme: {
     extend: {
       borderRadius: {
@@ -66,6 +66,6 @@ export const richesPayTailwindPreset: Config = {
       }
     }
   }
-};
+} satisfies Partial<Config>;
 
 export default richesPayTailwindPreset;
