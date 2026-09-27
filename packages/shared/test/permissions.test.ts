@@ -31,6 +31,20 @@ describe("permissions matrix", () => {
     expect(hasPermission("viewer", "payment_links.manage")).toBe(false);
   });
 
+  it("allows owner, admin, and developer roles to manage webhooks", () => {
+    expect(hasPermission("owner", "webhooks.manage")).toBe(true);
+    expect(hasPermission("admin", "webhooks.manage")).toBe(true);
+    expect(hasPermission("developer", "webhooks.manage")).toBe(true);
+    expect(hasPermission("finance", "webhooks.manage")).toBe(false);
+  });
+
+  it("allows owner, admin, and finance roles to manage settlements", () => {
+    expect(hasPermission("owner", "settlements.manage")).toBe(true);
+    expect(hasPermission("admin", "settlements.manage")).toBe(true);
+    expect(hasPermission("finance", "settlements.manage")).toBe(true);
+    expect(hasPermission("developer", "settlements.manage")).toBe(false);
+  });
+
   it("throws a forbidden error when a role lacks permission", () => {
     expect(() => requirePermission("team.manage", "viewer")).toThrow(
       /Permission denied/

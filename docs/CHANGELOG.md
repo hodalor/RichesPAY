@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-09-27
+- Added merchant webhook endpoint management and outbox delivery with encrypted `whsec_` secrets, signed payload delivery attempts, retry backoff, SSRF protections, replay and test-send dashboard endpoints, and delivery audit storage for merchant systems.
+- Added webhook delivery verification docs in `docs/webhooks.md`, plus auto-disable and merchant email alerts after repeated endpoint failures.
 - Added compliance controls for merchant collections, payouts, and suspension states with audited admin freeze/reactivate endpoints, dashboard read-only banners, merchant freeze history, and outbox events for freeze and unfreeze actions.
 - Added merchant compliance profiles with KYB-tier limits, collection velocity review flags, screening-provider hooks for onboarding and high-value payouts, rolling reserve holds and release tracking, and focused integration coverage for reserve settlement and payout `on_hold` resume behavior.
 - Added merchant balance top-ups with `topups`, merchant transfer references, low-balance alert thresholds, and email/webhook outbox writes, plus ledger-backed credits into `merchant_available` so one balance funds payouts and SMS.

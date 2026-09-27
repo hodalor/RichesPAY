@@ -1,5 +1,6 @@
 import {
   hasPermission,
+  merchantPermissions,
   requirePermission,
   requiresMerchantMfa,
   type MerchantPermission,
@@ -73,15 +74,7 @@ export function enforceDashboardMfa(
 }
 
 export function getDashboardPermissions(role: MerchantRole): MerchantPermission[] {
-  return (
-    [
-      "members.read",
-      "merchant.switch",
-      "payouts.create",
-      "api_keys.manage",
-      "team.manage"
-    ] as const
-  ).filter((permission) => hasPermission(role, permission));
+  return merchantPermissions.filter((permission) => hasPermission(role, permission));
 }
 
 export function assertDashboardPermission(

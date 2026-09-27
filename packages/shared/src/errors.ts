@@ -84,6 +84,14 @@ export const ERROR_CATALOG = {
     message: "A request with this idempotency key is still being processed.",
     status: 409
   },
+  settlement_account_cool_off: {
+    message: "This settlement account is still in its cool-off period.",
+    status: 403
+  },
+  settlement_account_unverified: {
+    message: "This settlement account is not yet verified for withdrawals.",
+    status: 403
+  },
   unauthorized: {
     message: "You must authenticate to access this resource.",
     status: 401

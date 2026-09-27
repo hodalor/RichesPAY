@@ -3,6 +3,9 @@ import type { FastifyBaseLogger } from "fastify";
 import { startCollectionStatusPollingLoop } from "../collections";
 import type { AppDatabase } from "../db";
 import { startPayoutProcessingLoop } from "../payouts";
+import { startReconciliationFetchLoop } from "../reconciliation";
+import { startAutomaticSettlementLoop } from "../settlements";
+import { startWebhookDeliveryLoop } from "../webhooks";
 import { ProviderCallbackService } from "./callbacks";
 import { ProviderCatalog } from "./catalog";
 import { startProviderHealthCheckLoop } from "./health";
@@ -46,12 +49,29 @@ export function startProviderBackgroundServices(input: {
     ...(input.logger ? { logger: input.logger } : {}),
     providerCatalog: catalog
   });
+  const webhookLoop = startWebhookDeliveryLoop({
+    database: input.database,
+    encryptionKey: input.encryptionKey,
+    ...(input.logger ? { logger: input.logger } : {})
+  });
+  const settlementLoop = startAutomaticSettlementLoop({
+    database: input.database,
+    ...(input.logger ? { logger: input.logger } : {})
+  });
+  const reconciliationLoop = startReconciliationFetchLoop({
+    database: input.database,
+    encryptionKey: input.encryptionKey,
+    ...(input.logger ? { logger: input.logger } : {})
+  });
 
   return {
     async stop() {
       collectionLoop.stop();
       healthLoop.stop();
       payoutLoop.stop();
+      reconciliationLoop.stop();
+      settlementLoop.stop();
+      webhookLoop.stop();
       await callbackService.close();
       await worker.close();
     }

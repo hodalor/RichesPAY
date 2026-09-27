@@ -99,9 +99,21 @@ export type PlatformAdminRole = "compliance" | "finance" | "operations" | "super
 
 export type PostingDirection = "credit" | "debit";
 
+export type ProviderStatementEntryType = "adjustment" | "collection" | "fee" | "payout";
+
+export type ProviderStatementSource = "api" | "csv_upload";
+
+export type ReconExceptionStatus = "dismissed" | "open" | "resolved";
+
+export type ReconExceptionType = "amount_mismatch" | "missing_at_provider" | "missing_in_richespay" | "status_mismatch";
+
+export type ReconResolutionAction = "dismiss" | "force_status" | "manual_adjustment";
+
 export type RefundStatus = "failed" | "pending" | "processing" | "successful";
 
 export type RpMode = "live" | "test";
+
+export type SettlementAccountType = "bank" | "mobile_money";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -523,6 +535,16 @@ export interface Merchants {
   website: string | null;
 }
 
+export interface MerchantSettlementSettings {
+  automatic_daily_settlement_enabled: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  last_auto_settlement_for_date: Timestamp | null;
+  merchant_id: string;
+  mode: RpMode;
+  settlement_account_id: string | null;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface MsisdnPrefixes {
   country_code: string;
   created_at: Generated<Timestamp>;
@@ -650,6 +672,74 @@ export interface ProviderCallbacks {
   received_at: Generated<Timestamp>;
 }
 
+export interface ProviderStatementLines {
+  amount: Int8;
+  channel_id: string;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  entry_type: ProviderStatementEntryType;
+  fee_minor: Generated<Int8>;
+  id: string;
+  provider_ref: string | null;
+  provider_status: string | null;
+  raw: Generated<Json>;
+  statement_date: Timestamp;
+  statement_id: string;
+}
+
+export interface ProviderStatements {
+  channel_id: string;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  float_balance_minor: Int8 | null;
+  id: string;
+  raw_file_path: string;
+  source: ProviderStatementSource;
+  statement_date: Timestamp;
+}
+
+export interface ReconDailySummaries {
+  balances_match: Generated<boolean>;
+  channel_id: string;
+  collection_count: Generated<number>;
+  collection_volume: Generated<Int8>;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  exception_count: Generated<number>;
+  fee_volume: Generated<Int8>;
+  id: string;
+  payout_count: Generated<number>;
+  payout_volume: Generated<Int8>;
+  provider_clearing_balance: Generated<Int8>;
+  provider_float_balance: Int8 | null;
+  statement_date: Timestamp;
+  statement_id: string;
+}
+
+export interface ReconExceptions {
+  channel_id: string;
+  created_at: Generated<Timestamp>;
+  currency: string | null;
+  exception_type: ReconExceptionType;
+  expected_amount: Int8 | null;
+  expected_status: string | null;
+  id: string;
+  merchant_id: string | null;
+  mode: RpMode | null;
+  provider_amount: Int8 | null;
+  provider_ref: string | null;
+  provider_status: string | null;
+  resolution_action: ReconResolutionAction | null;
+  resolution_reason: string | null;
+  resolved_at: Timestamp | null;
+  resolved_by: string | null;
+  resource_id: string | null;
+  resource_type: string | null;
+  statement_id: string | null;
+  statement_line_id: string | null;
+  status: Generated<ReconExceptionStatus>;
+}
+
 export interface Refunds {
   amount: Int8;
   channel_id: string | null;
@@ -678,6 +768,22 @@ export interface RoutingRules {
   kind: ChannelKind;
   network: string | null;
   updated_at: Generated<Timestamp>;
+}
+
+export interface SettlementAccounts {
+  cool_off_until: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  details: Generated<Json>;
+  id: string;
+  is_default: Generated<boolean>;
+  merchant_id: string;
+  mode: RpMode;
+  type: SettlementAccountType;
+  updated_at: Generated<Timestamp>;
+  updated_by: string;
+  verified_at: Timestamp | null;
+  verified_by: string | null;
 }
 
 export interface SmsPrices {
@@ -720,6 +826,47 @@ export interface TransactionEvents {
   to_status: string;
 }
 
+export interface WebhookDeliveries {
+  attempt: number;
+  created_at: Generated<Timestamp>;
+  delivered_at: Timestamp | null;
+  duration_ms: number | null;
+  endpoint_id: string;
+  event_id: string;
+  merchant_id: string;
+  mode: RpMode;
+  next_retry_at: Timestamp | null;
+  response_snippet: string | null;
+  status_code: number | null;
+}
+
+export interface WebhookEndpoints {
+  consecutive_failures: Generated<number>;
+  created_at: Generated<Timestamp>;
+  description: string;
+  enabled: Generated<boolean>;
+  events: string[];
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  secret: string;
+  updated_at: Generated<Timestamp>;
+  url: string;
+}
+
+export interface Withdrawals {
+  amount: Int8;
+  auto_generated: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  currency: string;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  payout_id: string;
+  settlement_account_id: string;
+}
+
 export interface DB {
   account_balances: AccountBalances;
   api_keys: ApiKeys;
@@ -749,6 +896,7 @@ export interface DB {
   merchant_fee_overrides: MerchantFeeOverrides;
   merchant_freeze_history: MerchantFreezeHistory;
   merchant_rolling_reserve_holds: MerchantRollingReserveHolds;
+  merchant_settlement_settings: MerchantSettlementSettings;
   merchants: Merchants;
   msisdn_prefixes: MsisdnPrefixes;
   payment_links: PaymentLinks;
@@ -759,9 +907,17 @@ export interface DB {
   profiles: Profiles;
   provider_api_logs: ProviderApiLogs;
   provider_callbacks: ProviderCallbacks;
+  provider_statement_lines: ProviderStatementLines;
+  provider_statements: ProviderStatements;
+  recon_daily_summaries: ReconDailySummaries;
+  recon_exceptions: ReconExceptions;
   refunds: Refunds;
   routing_rules: RoutingRules;
+  settlement_accounts: SettlementAccounts;
   sms_prices: SmsPrices;
   topups: Topups;
   transaction_events: TransactionEvents;
+  webhook_deliveries: WebhookDeliveries;
+  webhook_endpoints: WebhookEndpoints;
+  withdrawals: Withdrawals;
 }

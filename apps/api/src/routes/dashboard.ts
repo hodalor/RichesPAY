@@ -16,7 +16,9 @@ import { authenticateSupabaseSession } from "../auth/session";
 import { registerCheckoutDashboardRoutes } from "../checkout";
 import { ComplianceService } from "../compliance";
 import { registerPayoutDashboardRoutes } from "../payouts";
+import { registerSettlementDashboardRoutes } from "../settlements";
 import { registerTopupDashboardRoutes } from "../topups";
+import { registerWebhookDashboardRoutes } from "../webhooks";
 import { createSupabaseAnonClient } from "../auth/supabase-client";
 import { runWithSystemScope, type ScopedTransaction } from "../db";
 import { dashboardAuthPlugin } from "../plugins/dashboard-auth";
@@ -453,7 +455,9 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
     await protectedApp.register(dashboardAuthPlugin);
     await registerCheckoutDashboardRoutes(protectedApp);
     await registerPayoutDashboardRoutes(protectedApp);
+    await registerSettlementDashboardRoutes(protectedApp);
     await registerTopupDashboardRoutes(protectedApp);
+    await registerWebhookDashboardRoutes(protectedApp);
 
     protectedApp.get(
       "/session",

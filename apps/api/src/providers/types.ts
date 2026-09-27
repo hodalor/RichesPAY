@@ -29,6 +29,23 @@ export interface ProviderResult {
   rawRedacted: Json | null;
 }
 
+export interface ProviderStatementLine {
+  amount: number;
+  currency: string;
+  entryType: "adjustment" | "collection" | "fee" | "payout";
+  feeMinor?: number;
+  providerRef?: string | null;
+  providerStatus?: string | null;
+  raw: Json;
+}
+
+export interface ProviderStatementResult {
+  currency: string;
+  floatBalanceMinor?: number | null;
+  rawFilePath: string;
+  rows: ProviderStatementLine[];
+}
+
 export interface ScreeningResult {
   matchReason?: string;
   outcome: "clear" | "review_required" | "blocked";
@@ -136,6 +153,7 @@ export interface MobileMoneyProvider {
   collect(req: MobileMoneyCollectRequest): Promise<ProviderResult>;
   payout(req: MobileMoneyPayoutRequest): Promise<ProviderResult>;
   getStatus(providerRef: string): Promise<ProviderResult>;
+  fetchStatement?(statementDate: string): Promise<ProviderStatementResult>;
   lookupAccountName?(msisdn: string): Promise<ProviderResult>;
   verifyCallback(input: ProviderCallbackVerificationInput): Promise<boolean> | boolean;
   parseCallback(rawBody: string): Promise<NormalizedEvent> | NormalizedEvent;
@@ -144,6 +162,7 @@ export interface MobileMoneyProvider {
 
 export interface CardAcquirer {
   createPaymentSession(req: CardPaymentSessionRequest): Promise<ProviderResult>;
+  fetchStatement?(statementDate: string): Promise<ProviderStatementResult>;
   getStatus(ref: string): Promise<ProviderResult>;
   verifyCallback(input: ProviderCallbackVerificationInput): Promise<boolean> | boolean;
   parseCallback(rawBody: string): Promise<NormalizedEvent> | NormalizedEvent;
@@ -152,6 +171,7 @@ export interface CardAcquirer {
 }
 
 export interface BankPayoutProvider {
+  fetchStatement?(statementDate: string): Promise<ProviderStatementResult>;
   payout(req: BankPayoutRequest): Promise<ProviderResult>;
   getStatus(ref: string): Promise<ProviderResult>;
   verifyCallback(input: ProviderCallbackVerificationInput): Promise<boolean> | boolean;

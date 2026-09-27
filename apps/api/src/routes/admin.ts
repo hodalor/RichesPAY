@@ -4,6 +4,7 @@ import { adminAuthPlugin } from "../plugins/admin-auth";
 import { registerComplianceAdminRoutes } from "../compliance";
 import { registerPricingAdminRoutes } from "../pricing/admin-routes";
 import { registerProviderAdminRoutes } from "../providers/admin-routes";
+import { registerReconciliationAdminRoutes } from "../reconciliation";
 import { registerTopupAdminRoutes } from "../topups";
 
 import type { FastifyTypedInstance } from "../types";
@@ -14,6 +15,7 @@ export async function registerAdminRoutes(app: FastifyTypedInstance) {
     await registerComplianceAdminRoutes(protectedApp);
     await registerPricingAdminRoutes(protectedApp);
     await registerProviderAdminRoutes(protectedApp);
+    await registerReconciliationAdminRoutes(protectedApp);
     await registerTopupAdminRoutes(protectedApp);
 
     protectedApp.get(

@@ -29,8 +29,10 @@ export const merchantPermissions = [
   "members.read",
   "merchant.switch",
   "payouts.create",
+  "settlements.manage",
   "topups.manage",
   "api_keys.manage",
+  "webhooks.manage",
   "payment_links.manage",
   "team.manage"
 ] as const;
@@ -46,7 +48,9 @@ export const merchantPermissionMatrix: Record<
   "merchant.switch": merchantRoles,
   "payment_links.manage": ["owner", "admin", "developer"],
   "payouts.create": ["owner", "admin", "finance"],
+  "settlements.manage": ["owner", "admin", "finance"],
   "topups.manage": ["owner", "admin", "finance"],
+  "webhooks.manage": ["owner", "admin", "developer"],
   "team.manage": ["owner", "admin"]
 };
 
