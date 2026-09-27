@@ -36,6 +36,17 @@ Test-mode bank payouts use the simulator `BankPayoutProvider` through the generi
 | `0005` | Times out | Outcome is unknown on submit, then `getStatus()` succeeds |
 | Any other suffix | Accepted immediately | Treated as a normal successful bank payout |
 
+## Simulator SMS Numbers
+
+Test-mode SMS traffic uses the simulator `SmsProvider`. The simulator behavior is determined by the destination number ending:
+
+| Ending | Submit behavior | Delivery report outcome |
+| --- | --- | --- |
+| `0001` | Accepted immediately | `delivered` |
+| `0002` | Accepted immediately | `undelivered` |
+| `0003` | Fails immediately | `rejected` |
+| Any other suffix | Accepted immediately | `delivered` |
+
 ## Top-Ups In Test Mode
 
 - Dashboard merchants can use **Add test funds** to credit `merchant_available` instantly without going through a provider.

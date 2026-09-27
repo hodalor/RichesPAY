@@ -23,6 +23,8 @@ import { GenericCardAcquirer } from "./card_generic";
 import { CredentialEncryptionService } from "./crypto";
 import { HttpProviderClient } from "./http-client";
 import { MtnMomoProvider } from "./mtn_momo";
+import { HttpSmsProvider } from "./sms_http";
+import { SmppSmsProvider } from "./sms_smpp";
 import { TelecelCashProvider } from "./telecel_cash";
 import {
   SimulatorBankPayoutProvider,
@@ -124,7 +126,33 @@ export class ProviderCatalog {
       return new SimulatorSmsProvider();
     }
 
-    return new PassiveSmsProvider(channel.providerCode, channel.config);
+    const cached = this.#adapterCache.get(channel.id);
+    if (cached) {
+      return cached as SmsProvider;
+    }
+
+    const credentials = this.#decryptCredentials(channel.credentialsEncrypted);
+    const adapter = (() => {
+      switch (channel.providerCode) {
+        case "sms_http":
+          return new HttpSmsProvider({
+            channelId: channel.id,
+            config: channel.config,
+            credentials,
+            transport: this.#requireTransport(channel.providerCode)
+          });
+        case "sms_smpp":
+          return new SmppSmsProvider({
+            config: channel.config,
+            credentials
+          });
+        default:
+          return new PassiveSmsProvider(channel.providerCode, channel.config);
+      }
+    })();
+
+    this.#adapterCache.set(channel.id, adapter);
+    return adapter;
   }
 
   resolveScreeningProvider(): ScreeningProvider {

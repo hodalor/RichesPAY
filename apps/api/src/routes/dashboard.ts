@@ -15,7 +15,9 @@ import {
 import { authenticateSupabaseSession } from "../auth/session";
 import { registerCheckoutDashboardRoutes } from "../checkout";
 import { ComplianceService } from "../compliance";
+import { registerMerchantDashboardRoutes } from "../dashboard/merchant-routes";
 import { registerPayoutDashboardRoutes } from "../payouts";
+import { registerSmsDashboardRoutes } from "../sms";
 import { registerSettlementDashboardRoutes } from "../settlements";
 import { registerTopupDashboardRoutes } from "../topups";
 import { registerWebhookDashboardRoutes } from "../webhooks";
@@ -61,8 +63,26 @@ const createApiKeyBodySchema = z.object({
   expires_at: z.string().datetime().optional(),
   ip_allowlist: z.array(z.string().min(1)).optional(),
   kind: z.enum(apiKeyKinds),
+  mode: z.enum(["test", "live"]).optional(),
   name: z.string().min(1),
   scopes: z.array(z.enum(apiKeyScopes)).min(1)
+});
+
+const dateOnlySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+const apiRequestLogQuerySchema = z.object({
+  end_date: dateOnlySchema.optional(),
+  limit: z.coerce.number().int().positive().max(100).default(50),
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
+  start_date: dateOnlySchema.optional(),
+  status_class: z.enum(["2xx", "4xx", "5xx"]).optional()
+});
+
+const eventsOutboxQuerySchema = z.object({
+  end_date: dateOnlySchema.optional(),
+  limit: z.coerce.number().int().positive().max(100).default(50),
+  start_date: dateOnlySchema.optional(),
+  type: z.string().min(1).optional()
 });
 
 async function requireSession(
@@ -74,6 +94,26 @@ async function requireSession(
     app.appEnv.SUPABASE_JWT_SECRET,
     authorizationHeader
   );
+}
+
+function makeDateRange(input: {
+  endDate?: string | undefined;
+  startDate?: string | undefined;
+}) {
+  const next: {
+    endDate?: Date;
+    startDate?: Date;
+  } = {};
+
+  if (input.startDate) {
+    next.startDate = new Date(`${input.startDate}T00:00:00.000Z`);
+  }
+
+  if (input.endDate) {
+    next.endDate = new Date(`${input.endDate}T23:59:59.999Z`);
+  }
+
+  return next;
 }
 
 export async function registerDashboardRoutes(app: FastifyTypedInstance) {
@@ -454,7 +494,9 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
   await app.register(async (protectedApp) => {
     await protectedApp.register(dashboardAuthPlugin);
     await registerCheckoutDashboardRoutes(protectedApp);
+    await registerMerchantDashboardRoutes(protectedApp);
     await registerPayoutDashboardRoutes(protectedApp);
+    await registerSmsDashboardRoutes(protectedApp);
     await registerSettlementDashboardRoutes(protectedApp);
     await registerTopupDashboardRoutes(protectedApp);
     await registerWebhookDashboardRoutes(protectedApp);
@@ -503,12 +545,18 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
                   suspension_reason: z.string().nullable()
                 }),
                 email: z.string().nullable(),
+                active_products: z.object({
+                  collections: z.boolean(),
+                  payouts: z.boolean(),
+                  sms: z.boolean()
+                }),
                 merchant_id: z.string(),
                 merchant_name: z.string(),
                 mode: z.enum(["test", "live"]),
                 permissions: z.array(z.string()),
                 role: z.enum(["owner", "admin", "finance", "developer", "support", "viewer"]),
                 settlement_currency: z.string(),
+                timezone: z.string(),
                 user_id: z.string()
               })
             })
@@ -523,6 +571,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
 
         return {
           data: {
+            active_products: request.dashboardMembership!.activeProducts,
             compliance: {
               collections_freeze_category: summary.collectionsFreezeCategory,
               collections_freeze_reason: summary.collectionsFreezeReason,
@@ -542,6 +591,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
           permissions: request.dashboardPermissions ?? [],
           role: request.dashboardMembership!.role,
           settlement_currency: request.dashboardMembership!.settlementCurrency,
+          timezone: request.dashboardMembership!.timezone,
           user_id: request.dashboardMembership!.userId
         }
         };
@@ -744,6 +794,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
                   kind: z.enum(apiKeyKinds),
                   last4: z.string(),
                   last_used_at: z.string().nullable(),
+                  mode: z.enum(["test", "live"]),
                   name: z.string(),
                   prefix: z.string(),
                   revoked_at: z.string().nullable(),
@@ -769,13 +820,13 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               "kind",
               "last4",
               "last_used_at",
+              "mode",
               "name",
               "prefix",
               "revoked_at",
               "scopes"
             ])
             .where("merchant_id", "=", request.dashboardMembership!.merchantId)
-            .where("mode", "=", request.dashboardMembership!.mode)
             .orderBy("created_at desc")
             .execute()
         );
@@ -790,6 +841,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
             kind: key.kind as ApiKeyKind,
             last4: key.last4,
             last_used_at: key.last_used_at?.toISOString() ?? null,
+            mode: key.mode,
             name: key.name,
             prefix: key.prefix,
             revoked_at: key.revoked_at?.toISOString() ?? null,
@@ -814,6 +866,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
                 key: z.string(),
                 kind: z.enum(apiKeyKinds),
                 last4: z.string(),
+                mode: z.enum(["test", "live"]),
                 name: z.string(),
                 prefix: z.string(),
                 scopes: z.array(z.enum(apiKeyScopes))
@@ -825,7 +878,8 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
       async (request, reply) => {
         request.assertDashboardPermission("api_keys.manage");
         const body = createApiKeyBodySchema.parse(request.body);
-        const plainKey = createPlainApiKey(request.dashboardMembership!.mode, body.kind);
+        const keyMode = body.mode ?? request.dashboardMembership!.mode;
+        const plainKey = createPlainApiKey(keyMode, body.kind);
 
         const createdKey = await request.withDashboardScope(async (trx) => {
           const createdAt = new Date();
@@ -843,7 +897,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               kind: body.kind,
               last4: getApiKeyLast4(plainKey),
               merchant_id: request.dashboardMembership!.merchantId,
-              mode: request.dashboardMembership!.mode,
+              mode: keyMode,
               name: body.name,
               prefix: getApiKeyPrefix(plainKey),
               revoked_at: null,
@@ -856,6 +910,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               "ip_allowlist",
               "kind",
               "last4",
+              "mode",
               "name",
               "prefix",
               "scopes"
@@ -872,6 +927,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
             key: plainKey,
             kind: createdKey.kind as ApiKeyKind,
             last4: createdKey.last4,
+            mode: createdKey.mode,
             name: createdKey.name,
             prefix: createdKey.prefix,
             scopes: createdKey.scopes as ApiKeyScope[]
@@ -894,6 +950,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
                 id: z.string(),
                 key: z.string(),
                 last4: z.string(),
+                mode: z.enum(["test", "live"]),
                 prefix: z.string(),
                 previous_key_expires_at: z.string(),
                 scopes: z.array(z.enum(apiKeyScopes))
@@ -905,15 +962,12 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
       async (request, reply) => {
         request.assertDashboardPermission("api_keys.manage");
         const { apiKeyId } = request.params as { apiKeyId: string };
-        const plainKey = createPlainApiKey(request.dashboardMembership!.mode, "secret");
-
         const rolledKey = await request.withDashboardScope(async (trx) => {
           const existing = await trx
             .selectFrom("api_keys")
             .selectAll()
             .where("id", "=", apiKeyId)
             .where("merchant_id", "=", request.dashboardMembership!.merchantId)
-            .where("mode", "=", request.dashboardMembership!.mode)
             .executeTakeFirst();
 
           if (!existing) {
@@ -941,6 +995,8 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               statusCode: 400
             });
           }
+
+          const plainKey = createPlainApiKey(existing.mode, "secret");
 
           const graceExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
           const previousKeyExpiresAt = existing.expires_at && existing.expires_at < graceExpiry
@@ -972,11 +1028,12 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               revoked_at: null,
               scopes: existing.scopes
             })
-            .returning(["expires_at", "id", "last4", "prefix", "scopes"])
+            .returning(["expires_at", "id", "last4", "mode", "prefix", "scopes"])
             .executeTakeFirstOrThrow();
 
           return {
             ...created,
+            key: plainKey,
             previousKeyExpiresAt
           };
         });
@@ -985,8 +1042,9 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
           data: {
             expires_at: rolledKey.expires_at?.toISOString() ?? null,
             id: rolledKey.id,
-            key: plainKey,
+            key: rolledKey.key,
             last4: rolledKey.last4,
+            mode: rolledKey.mode,
             prefix: rolledKey.prefix,
             previous_key_expires_at: rolledKey.previousKeyExpiresAt.toISOString(),
             scopes: rolledKey.scopes as ApiKeyScope[]
@@ -1024,7 +1082,6 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
             })
             .where("id", "=", apiKeyId)
             .where("merchant_id", "=", request.dashboardMembership!.merchantId)
-            .where("mode", "=", request.dashboardMembership!.mode)
             .returning("revoked_at")
             .executeTakeFirst();
 
@@ -1044,6 +1101,159 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
             revoked: true,
             revoked_at: revokedAt.toISOString()
           }
+        };
+      }
+    );
+
+    protectedApp.get(
+      "/api-request-logs",
+      {
+        schema: {
+          querystring: apiRequestLogQuerySchema,
+          response: {
+            200: z.object({
+              data: z.array(
+                z.object({
+                  created_at: z.string().datetime(),
+                  duration_ms: z.number().int(),
+                  method: z.string(),
+                  path: z.string(),
+                  request_body: z.unknown().nullable(),
+                  request_id: z.string(),
+                  response_body: z.unknown().nullable(),
+                  status_code: z.number().int()
+                })
+              )
+            })
+          }
+        }
+      },
+      async (request) => {
+        request.assertDashboardPermission("api_keys.manage");
+        const queryInput = apiRequestLogQuerySchema.parse(request.query);
+        const dateRange = makeDateRange({
+          endDate: queryInput.end_date,
+          startDate: queryInput.start_date
+        });
+
+        const logs = await request.withDashboardScope(async (trx) => {
+          let query = trx
+            .selectFrom("api_request_logs")
+            .select([
+              "created_at",
+              "duration_ms",
+              "method",
+              "path",
+              "request_body",
+              "request_id",
+              "response_body",
+              "status_code"
+            ])
+            .where("merchant_id", "=", request.dashboardMembership!.merchantId)
+            .where("mode", "=", request.dashboardMembership!.mode);
+
+          if (queryInput.method) {
+            query = query.where("method", "=", queryInput.method);
+          }
+
+          if (dateRange.startDate) {
+            query = query.where("created_at", ">=", dateRange.startDate);
+          }
+
+          if (dateRange.endDate) {
+            query = query.where("created_at", "<=", dateRange.endDate);
+          }
+
+          switch (queryInput.status_class) {
+            case "2xx":
+              query = query.where("status_code", ">=", 200).where("status_code", "<", 300);
+              break;
+            case "4xx":
+              query = query.where("status_code", ">=", 400).where("status_code", "<", 500);
+              break;
+            case "5xx":
+              query = query.where("status_code", ">=", 500).where("status_code", "<", 600);
+              break;
+            default:
+              break;
+          }
+
+          return query.orderBy("created_at desc").limit(queryInput.limit).execute();
+        });
+
+        return {
+          data: logs.map((row) => ({
+            created_at: row.created_at.toISOString(),
+            duration_ms: row.duration_ms,
+            method: row.method,
+            path: row.path,
+            request_body: row.request_body,
+            request_id: row.request_id,
+            response_body: row.response_body,
+            status_code: row.status_code
+          }))
+        };
+      }
+    );
+
+    protectedApp.get(
+      "/events-outbox",
+      {
+        schema: {
+          querystring: eventsOutboxQuerySchema,
+          response: {
+            200: z.object({
+              data: z.array(
+                z.object({
+                  created_at: z.string().datetime(),
+                  id: z.string(),
+                  mode: z.enum(["test", "live"]),
+                  payload: z.unknown(),
+                  type: z.string()
+                })
+              )
+            })
+          }
+        }
+      },
+      async (request) => {
+        request.assertDashboardPermission("api_keys.manage");
+        const queryInput = eventsOutboxQuerySchema.parse(request.query);
+        const dateRange = makeDateRange({
+          endDate: queryInput.end_date,
+          startDate: queryInput.start_date
+        });
+
+        const events = await request.withDashboardScope(async (trx) => {
+          let query = trx
+            .selectFrom("events_outbox")
+            .select(["created_at", "id", "mode", "payload", "type"])
+            .where("merchant_id", "=", request.dashboardMembership!.merchantId)
+            .where("mode", "=", request.dashboardMembership!.mode);
+
+          if (queryInput.type) {
+            query = query.where("type", "=", queryInput.type);
+          }
+
+          if (dateRange.startDate) {
+            query = query.where("created_at", ">=", dateRange.startDate);
+          }
+
+          if (dateRange.endDate) {
+            query = query.where("created_at", "<=", dateRange.endDate);
+          }
+
+          return query.orderBy("created_at desc").limit(queryInput.limit).execute();
+        });
+
+        return {
+          data: events.map((row) => ({
+            created_at: row.created_at.toISOString(),
+            id: row.id,
+            mode: row.mode,
+            payload: row.payload,
+            type: row.type
+          }))
         };
       }
     );

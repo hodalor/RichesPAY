@@ -113,7 +113,21 @@ export type RefundStatus = "failed" | "pending" | "processing" | "successful";
 
 export type RpMode = "live" | "test";
 
+export type SenderIdApprovalStatus = "approved" | "pending" | "rejected" | "submitted";
+
+export type SenderIdPurpose = "marketing" | "otp" | "transactional";
+
 export type SettlementAccountType = "bank" | "mobile_money";
+
+export type SmsBatchStatus = "completed" | "partial" | "processing" | "queued";
+
+export type SmsMessageEncoding = "gsm7" | "ucs2";
+
+export type SmsMessageStatus = "delivered" | "failed" | "queued" | "rejected" | "sent" | "undelivered";
+
+export type SmsMessageType = "marketing" | "otp" | "transactional";
+
+export type SmsOtpStatus = "expired" | "failed" | "pending" | "verified";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -289,6 +303,35 @@ export interface ComplianceReviewFlags {
   rule_code: string;
   status: Generated<ComplianceReviewStatus>;
   summary: string;
+}
+
+export interface ContactGroupMembers {
+  contact_id: string;
+  created_at: Generated<Timestamp>;
+  group_id: string;
+  merchant_id: string;
+  mode: RpMode;
+}
+
+export interface ContactGroups {
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  name: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface Contacts {
+  created_at: Generated<Timestamp>;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  name: string | null;
+  phone: string;
+  tags: Generated<string[]>;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface Countries {
@@ -469,6 +512,28 @@ export interface MerchantComplianceProfiles {
   velocity_window_minutes: Generated<number>;
 }
 
+export interface MerchantDailyStats {
+  collections_amount_minor: Generated<Int8>;
+  collections_count: Generated<number>;
+  collections_pending_count: Generated<number>;
+  collections_successful_count: Generated<number>;
+  created_at: Generated<Timestamp>;
+  merchant_id: string;
+  mode: RpMode;
+  payouts_amount_minor: Generated<Int8>;
+  payouts_count: Generated<number>;
+  payouts_failed_count: Generated<number>;
+  payouts_pending_approval_count: Generated<number>;
+  payouts_successful_count: Generated<number>;
+  sms_count: Generated<number>;
+  sms_delivered_count: Generated<number>;
+  sms_failed_count: Generated<number>;
+  sms_pending_count: Generated<number>;
+  sms_spend_minor: Generated<Int8>;
+  stat_date: Timestamp;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface MerchantFeeOverrides {
   active: Generated<boolean>;
   created_at: Generated<Timestamp>;
@@ -497,6 +562,28 @@ export interface MerchantFreezeHistory {
   merchant_id: string;
   mode: RpMode;
   reason: string | null;
+}
+
+export interface MerchantNotifications {
+  body: string;
+  created_at: Generated<Timestamp>;
+  data: Generated<Json>;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  read_at: Timestamp | null;
+  title: string;
+  type: string;
+}
+
+export interface MerchantProducts {
+  collections_enabled: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  merchant_id: string;
+  mode: RpMode;
+  payouts_enabled: Generated<boolean>;
+  sms_enabled: Generated<boolean>;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface MerchantRollingReserveHolds {
@@ -629,6 +716,14 @@ export interface PlatformAdmins {
   role: PlatformAdminRole;
   updated_at: Generated<Timestamp>;
   user_id: string;
+}
+
+export interface PlatformSmsSettings {
+  created_at: Generated<Timestamp>;
+  default_otp_sender_id: string | null;
+  mode: RpMode;
+  updated_at: Generated<Timestamp>;
+  updated_by: string;
 }
 
 export interface Postings {
@@ -770,6 +865,32 @@ export interface RoutingRules {
   updated_at: Generated<Timestamp>;
 }
 
+export interface SenderIdApprovals {
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  network: string;
+  rejection_reason: string | null;
+  sender_id_id: string;
+  status: Generated<SenderIdApprovalStatus>;
+  updated_at: Generated<Timestamp>;
+  updated_by: string;
+}
+
+export interface SenderIds {
+  authorization_letter: string;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  purpose: SenderIdPurpose;
+  sample_message: string;
+  sender_id: string;
+}
+
 export interface SettlementAccounts {
   cool_off_until: Timestamp | null;
   created_at: Generated<Timestamp>;
@@ -786,12 +907,92 @@ export interface SettlementAccounts {
   verified_by: string | null;
 }
 
+export interface SmsBatches {
+  accepted_count: Generated<number>;
+  body: string;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  id: string;
+  merchant_id: string;
+  metadata: Generated<Json>;
+  mode: RpMode;
+  reference: string | null;
+  rejected_count: Generated<number>;
+  scheduled_at: Timestamp | null;
+  sender_id: string | null;
+  status: Generated<SmsBatchStatus>;
+  total_count: Generated<number>;
+  type: SmsMessageType;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface SmsMessages {
+  batch_id: string | null;
+  body: string;
+  channel_id: string | null;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  delivered_at: Timestamp | null;
+  encoding: SmsMessageEncoding;
+  failure_code: string | null;
+  id: string;
+  merchant_id: string;
+  metadata: Generated<Json>;
+  mode: RpMode;
+  price_minor: Int8;
+  provider_ref: string | null;
+  reference: string | null;
+  scheduled_at: Timestamp | null;
+  segments: number;
+  sender_id: string;
+  sent_at: Timestamp | null;
+  status: Generated<SmsMessageStatus>;
+  to: string;
+  type: SmsMessageType;
+}
+
+export interface SmsOptOuts {
+  created_at: Generated<Timestamp>;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  phone: string;
+}
+
+export interface SmsOtps {
+  attempts: Generated<number>;
+  code_hash: string;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  id: string;
+  max_attempts: Generated<number>;
+  merchant_id: string;
+  mode: RpMode;
+  sender_id: string | null;
+  sms_message_id: string | null;
+  status: Generated<SmsOtpStatus>;
+  to: string;
+  updated_at: Generated<Timestamp>;
+  verified_at: Timestamp | null;
+}
+
 export interface SmsPrices {
   country_code: string;
   created_at: Generated<Timestamp>;
   currency: string;
   network: string | null;
   price_per_segment_minor: Int8;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface SmsTemplates {
+  body: string;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  name: string;
   updated_at: Generated<Timestamp>;
 }
 
@@ -879,6 +1080,9 @@ export interface DB {
   checkout_sessions: CheckoutSessions;
   collections: Collections;
   compliance_review_flags: ComplianceReviewFlags;
+  contact_group_members: ContactGroupMembers;
+  contact_groups: ContactGroups;
+  contacts: Contacts;
   countries: Countries;
   email_outbox: EmailOutbox;
   events_outbox: EventsOutbox;
@@ -893,8 +1097,11 @@ export interface DB {
   memberships: Memberships;
   merchant_balance_alert_thresholds: MerchantBalanceAlertThresholds;
   merchant_compliance_profiles: MerchantComplianceProfiles;
+  merchant_daily_stats: MerchantDailyStats;
   merchant_fee_overrides: MerchantFeeOverrides;
   merchant_freeze_history: MerchantFreezeHistory;
+  merchant_notifications: MerchantNotifications;
+  merchant_products: MerchantProducts;
   merchant_rolling_reserve_holds: MerchantRollingReserveHolds;
   merchant_settlement_settings: MerchantSettlementSettings;
   merchants: Merchants;
@@ -903,6 +1110,7 @@ export interface DB {
   payout_batches: PayoutBatches;
   payouts: Payouts;
   platform_admins: PlatformAdmins;
+  platform_sms_settings: PlatformSmsSettings;
   postings: Postings;
   profiles: Profiles;
   provider_api_logs: ProviderApiLogs;
@@ -913,8 +1121,15 @@ export interface DB {
   recon_exceptions: ReconExceptions;
   refunds: Refunds;
   routing_rules: RoutingRules;
+  sender_id_approvals: SenderIdApprovals;
+  sender_ids: SenderIds;
   settlement_accounts: SettlementAccounts;
+  sms_batches: SmsBatches;
+  sms_messages: SmsMessages;
+  sms_opt_outs: SmsOptOuts;
+  sms_otps: SmsOtps;
   sms_prices: SmsPrices;
+  sms_templates: SmsTemplates;
   topups: Topups;
   transaction_events: TransactionEvents;
   webhook_deliveries: WebhookDeliveries;

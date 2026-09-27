@@ -145,6 +145,53 @@ export async function registerPricingAdminRoutes(app: FastifyTypedInstance) {
     }
   );
 
+  app.get(
+    "/pricing/merchant-overrides",
+    {
+      schema: {
+        response: {
+          200: z.object({
+            data: z.array(
+              feePlanResponseSchema.extend({
+                merchant_id: z.string(),
+                mode: z.enum(["test", "live"]),
+                updated_at: z.string().datetime()
+              })
+            )
+          })
+        }
+      }
+    },
+    async () => {
+      const overrides = await app.db
+        .selectFrom("merchant_fee_overrides")
+        .selectAll()
+        .orderBy("updated_at desc")
+        .execute();
+
+      return {
+        data: overrides.map((override) => ({
+          active: override.active,
+          country_code: "",
+          currency: override.currency,
+          fee_bearer: override.fee_bearer,
+          fixed_minor: Number(override.fixed_minor),
+          id: override.id,
+          kind: override.kind,
+          max_minor: override.max_minor === null ? null : Number(override.max_minor),
+          merchant_id: override.merchant_id,
+          method: override.method,
+          min_minor: Number(override.min_minor),
+          mode: override.mode,
+          name: override.name,
+          network: override.network,
+          percent_bps: override.percent_bps,
+          updated_at: override.updated_at.toISOString()
+        }))
+      };
+    }
+  );
+
   app.post(
     "/pricing/fx-rates",
     {

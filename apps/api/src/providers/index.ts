@@ -20,6 +20,8 @@ export * from "./queue";
 export * from "./router";
 export * from "./screening";
 export * from "./simulator";
+export * from "./sms_http";
+export * from "./sms_smpp";
 export * from "./telecel_cash";
 export * from "./types";
 export * from "./zamtel_money";

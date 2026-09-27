@@ -49,10 +49,13 @@ const buttonVariants: Record<Variant, string> = {
 };
 
 const statusBadgeStyles = {
+  approved: "bg-success-soft text-success",
   pending: "bg-warning-soft text-warning",
   processing: "bg-info-soft text-info",
+  submitted: "bg-info-soft text-info",
   successful: "bg-success-soft text-success",
   failed: "bg-danger-soft text-danger",
+  rejected: "bg-danger-soft text-danger",
   reversed: "bg-neutral-soft text-neutral",
   expired: "bg-neutral-soft text-neutral",
   frozen: "bg-neutral-soft text-text",
@@ -61,10 +64,13 @@ const statusBadgeStyles = {
 } as const;
 
 const statusLabelMap = {
+  approved: "Approved",
   pending: "Pending",
   processing: "Processing",
+  submitted: "Submitted",
   successful: "Successful",
   failed: "Failed",
+  rejected: "Rejected",
   reversed: "Reversed",
   expired: "Expired",
   frozen: "Frozen",
@@ -138,6 +144,63 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           )}
           {...props}
         />
+      </label>
+    );
+  }
+);
+
+export interface TextareaProps
+  extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
+  label?: string;
+}
+
+export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
+  function Textarea({ className, label, ...props }, ref) {
+    return (
+      <label className="flex w-full flex-col gap-2 text-sm">
+        {label ? (
+          <span className="font-medium text-text-secondary">{label}</span>
+        ) : null}
+        <textarea
+          ref={ref}
+          className={cn(
+            "min-h-28 w-full rounded-input border border-border bg-surface px-3 py-2.5 text-sm text-text shadow-softer outline-none transition placeholder:text-text-muted focus:border-brand/30 focus:ring-4 focus:ring-brand/10",
+            className
+          )}
+          {...props}
+        />
+      </label>
+    );
+  }
+);
+
+export interface CheckboxProps
+  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
+  description?: string;
+  label: string;
+}
+
+export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
+  function Checkbox({ className, description, label, ...props }, ref) {
+    return (
+      <label className="flex items-start gap-3 rounded-input border border-border bg-surface px-3 py-3 shadow-softer">
+        <input
+          ref={ref}
+          type="checkbox"
+          className={cn(
+            "mt-0.5 size-4 rounded border-border text-brand focus:ring-4 focus:ring-brand/10",
+            className
+          )}
+          {...props}
+        />
+        <span className="min-w-0">
+          <span className="block text-sm font-medium text-text">{label}</span>
+          {description ? (
+            <span className="mt-1 block text-xs text-text-secondary">
+              {description}
+            </span>
+          ) : null}
+        </span>
       </label>
     );
   }
@@ -971,12 +1034,20 @@ export interface SidebarItem {
   label: string;
 }
 
+export interface SidebarSection {
+  items: readonly SidebarItem[];
+  label: string;
+}
+
 export interface AppShellProps {
   activePath: string;
   children: React.ReactNode;
   mode: PageMode;
-  navItems: readonly SidebarItem[];
+  navItems?: readonly SidebarItem[];
+  navSections?: readonly SidebarSection[];
   onModeChange: (mode: PageMode) => void;
+  shellVariant?: "admin" | "merchant";
+  subtitle?: string;
   title: string;
   topBarContent?: React.ReactNode;
 }
@@ -985,13 +1056,17 @@ export function AppShell({
   activePath,
   children,
   mode,
-  navItems,
+  navItems = [],
+  navSections,
   onModeChange,
+  shellVariant = "merchant",
+  subtitle = "Merchant dashboard",
   title,
   topBarContent
 }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [collapsed, setCollapsed] = React.useState(false);
+  const sections = navSections ?? [{ items: navItems, label: "Navigation" }];
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-surface-subtle text-text">
@@ -1025,25 +1100,37 @@ export function AppShell({
               <PanelLeft className="size-4" />
             </Button>
           </div>
-          <nav className="mt-8 space-y-1">
-            {navItems.map((item) => {
-              const active = item.href === activePath;
-              return (
-                <a
-                  key={item.href}
+          <nav className="mt-8 space-y-5">
+            {sections.map((section) => (
+              <div key={section.label} className="space-y-1">
+                <p
                   className={cn(
-                    "flex items-center gap-3 rounded-input px-3 py-2.5 text-sm font-medium transition",
-                    active
-                      ? "bg-brand-50 text-brand"
-                      : "text-text-secondary hover:bg-surface-subtle hover:text-text"
+                    "px-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-muted",
+                    collapsed && "md:hidden"
                   )}
-                  href={item.href}
                 >
-                  <span className="shrink-0">{item.icon}</span>
-                  <span className={cn(collapsed && "md:hidden")}>{item.label}</span>
-                </a>
-              );
-            })}
+                  {section.label}
+                </p>
+                {section.items.map((item) => {
+                  const active = item.href === activePath;
+                  return (
+                    <a
+                      key={item.href}
+                      className={cn(
+                        "flex items-center gap-3 rounded-input px-3 py-2.5 text-sm font-medium transition",
+                        active
+                          ? "bg-brand-50 text-brand"
+                          : "text-text-secondary hover:bg-surface-subtle hover:text-text"
+                      )}
+                      href={item.href}
+                    >
+                      <span className="shrink-0">{item.icon}</span>
+                      <span className={cn(collapsed && "md:hidden")}>{item.label}</span>
+                    </a>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
           <div className="mt-auto rounded-card border border-border bg-surface-subtle p-4">
             <div className="flex items-center justify-between gap-3">
@@ -1068,7 +1155,14 @@ export function AppShell({
           </div>
         </aside>
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 border-b border-border bg-surface/95 backdrop-blur">
+          <header
+            className={cn(
+              "sticky top-0 z-20 border-b backdrop-blur",
+              shellVariant === "admin"
+                ? "border-slate-900 bg-slate-900/95 text-white"
+                : "border-border bg-surface/95"
+            )}
+          >
             <div className="flex items-center justify-between gap-4 px-4 py-4 md:px-6">
               <div className="flex items-center gap-3">
                 <Button
@@ -1076,13 +1170,29 @@ export function AppShell({
                   onClick={() => {
                     setSidebarOpen((current) => !current);
                   }}
-                  variant="ghost"
+                  variant={shellVariant === "admin" ? "secondary" : "ghost"}
                 >
                   <Menu className="size-4" />
                 </Button>
                 <div>
-                  <p className="text-sm font-medium text-text">{title}</p>
-                  <p className="text-xs text-text-secondary">Merchant dashboard</p>
+                  <p
+                    className={cn(
+                      "text-sm font-medium",
+                      shellVariant === "admin" ? "text-white" : "text-text"
+                    )}
+                  >
+                    {title}
+                  </p>
+                  <p
+                    className={cn(
+                      "text-xs",
+                      shellVariant === "admin"
+                        ? "text-slate-300"
+                        : "text-text-secondary"
+                    )}
+                  >
+                    {subtitle}
+                  </p>
                 </div>
               </div>
               <div>{topBarContent}</div>
@@ -1169,10 +1279,67 @@ export function DataTable<TData extends RowData>({
   }
 
   const table = useReactTable(tableOptions);
+  const flatHeaders = table.getFlatHeaders();
 
   return (
     <section className="overflow-hidden rounded-card border border-border bg-surface shadow-softer">
-      <div className="overflow-x-auto">
+      <div className="md:hidden">
+        {loading ? (
+          <div className="divide-y divide-border">
+            {Array.from({ length: skeletonRows }).map((_, rowIndex) => (
+              <div className="space-y-3 px-4 py-4" key={`mobile-skeleton-${rowIndex}`}>
+                {columns.map((_, cellIndex) => (
+                  <div className="grid grid-cols-[110px,1fr] gap-3" key={`mobile-skeleton-${rowIndex}-${cellIndex}`}>
+                    <SkeletonBlock className="h-3 w-20" />
+                    <SkeletonBlock className="h-4 w-full" />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : data.length > 0 ? (
+          <div className="divide-y divide-border">
+            {table.getRowModel().rows.map((row) => (
+              <div
+                key={row.id}
+                className={cn(
+                  "space-y-3 px-4 py-4 transition hover:bg-surface-subtle",
+                  onRowClick && "cursor-pointer"
+                )}
+                onClick={() => {
+                  onRowClick?.(row.original);
+                }}
+              >
+                {row.getVisibleCells().map((cell) => {
+                  const header = flatHeaders.find(
+                    (item) => item.column.id === cell.column.id
+                  );
+
+                  return (
+                    <div
+                      className="grid grid-cols-[110px,1fr] items-start gap-3"
+                      key={cell.id}
+                    >
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+                        {header && !header.isPlaceholder
+                          ? flexRender(
+                              header.column.columnDef.header,
+                              header.getContext()
+                            )
+                          : cell.column.id}
+                      </div>
+                      <div className="min-w-0 text-sm text-text">
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
         <table className="min-w-full border-separate border-spacing-0">
           <thead className="sticky top-0 z-10 bg-surface">
             {table.getHeaderGroups().map((headerGroup) => (

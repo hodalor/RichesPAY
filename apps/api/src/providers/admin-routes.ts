@@ -395,6 +395,54 @@ export async function registerProviderAdminRoutes(app: FastifyTypedInstance) {
   );
 
   app.get(
+    "/routing-rules",
+    {
+      schema: {
+        response: {
+          200: z.object({
+            data: z.array(
+              z.object({
+                capability: z.enum(channelCapabilities),
+                channel_ids: z.array(z.string()),
+                country_code: z.string(),
+                id: z.string(),
+                kind: z.enum(channelKinds),
+                network: z.string().nullable()
+              })
+            )
+          })
+        }
+      }
+    },
+    async () => {
+      const rows = await runWithSystemScope(
+        app.db,
+        "list routing rules",
+        async (trx) =>
+          trx
+            .selectFrom("routing_rules")
+            .selectAll()
+            .orderBy("country_code")
+            .orderBy("kind")
+            .orderBy("capability")
+            .execute(),
+        { audit: false }
+      );
+
+      return {
+        data: rows.map((row) => ({
+          capability: row.capability,
+          channel_ids: row.channel_ids,
+          country_code: row.country_code,
+          id: row.id,
+          kind: row.kind,
+          network: row.network
+        }))
+      };
+    }
+  );
+
+  app.get(
     "/msisdn-prefixes",
     {
       schema: {

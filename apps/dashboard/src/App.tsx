@@ -11,156 +11,16 @@ import {
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type Session } from "@supabase/supabase-js";
-import {
-  Building2,
-  KeyRound,
-  LogOut,
-  Mail,
-  ShieldCheck,
-  UserPlus
-} from "lucide-react";
-import {
-  AppShell,
-  Button,
-  CopyField,
-  DataTable,
-  Drawer,
-  EmptyState,
-  Input,
-  Modal,
-  PageHeader,
-  Select,
-  Tabs,
-  ToastProvider,
-  useToast,
-  type ColumnDef
-} from "@richespay/ui";
-import {
-  formatMoney,
-  settlementCurrencyForCountry,
-  type MerchantRole
-} from "@richespay/shared";
+import { Building2 } from "lucide-react";
+import { Button, Input, ToastProvider, useToast } from "@richespay/ui";
 
 import { ApiError, apiRequest } from "./api-client";
+import { MerchantWorkspace } from "./routes/merchant-workspace";
+import { UIKitPage } from "./routes/ui-kit-page";
 import { supabase } from "./supabase";
 
-type MerchantMode = "live" | "test";
-
-interface MembershipSummary {
-  merchant_id: string;
-  merchant_name: string;
-  mode: MerchantMode;
-  role: MerchantRole;
-  settlement_currency: string;
-  timezone: string;
-}
-
-interface DashboardSessionData {
-  compliance: {
-    collections_freeze_category:
-      | "chargeback_risk"
-      | "fraud_review"
-      | "kyb_review"
-      | "operations"
-      | "other"
-      | "regulatory"
-      | "sanctions_screening"
-      | null;
-    collections_freeze_reason: string | null;
-    collections_frozen: boolean;
-    contact_link: string;
-    payouts_freeze_category:
-      | "chargeback_risk"
-      | "fraud_review"
-      | "kyb_review"
-      | "operations"
-      | "other"
-      | "regulatory"
-      | "sanctions_screening"
-      | null;
-    payouts_freeze_reason: string | null;
-    payouts_frozen: boolean;
-    status: string;
-    suspension_category:
-      | "chargeback_risk"
-      | "fraud_review"
-      | "kyb_review"
-      | "operations"
-      | "other"
-      | "regulatory"
-      | "sanctions_screening"
-      | null;
-    suspension_reason: string | null;
-  };
-  email: string | null;
-  merchant_id: string;
-  merchant_name: string;
-  mode: MerchantMode;
-  permissions: string[];
-  role: MerchantRole;
-  settlement_currency: string;
-  user_id: string;
-}
-
-interface DashboardTopup {
-  amount: number;
-  bank_reference: string | null;
-  collection_id: string | null;
-  completed_at: string | null;
-  confirmed_by: string | null;
-  created_at: string;
-  currency: string;
-  fee_minor: number;
-  id: string;
-  method: "mobile_money" | "card" | "bank_transfer";
-  next_action:
-    | {
-        iframe_url?: string;
-        type: "hosted_fields" | "redirect_url";
-        url?: string;
-      }
-    | null;
-  provider_ref: string | null;
-  status: "pending" | "successful" | "failed" | "expired";
-}
-
-interface BalanceAlertThreshold {
-  created_at: string;
-  currency: string;
-  is_below_threshold: boolean;
-  threshold_minor: number;
-  updated_at: string;
-}
-
-interface DashboardTopupSettings {
-  thresholds: BalanceAlertThreshold[];
-  transfer_reference: string;
-}
-
-interface TeamMember {
-  email: string | null;
-  full_name: string | null;
-  role: MerchantRole;
-  user_id: string;
-}
-
-interface InvitePreview {
-  email: string;
-  expires_at: string;
-  merchant_id: string;
-  role: MerchantRole;
-}
-
-function formatComplianceCategoryLabel(value: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  return value
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
+const queryClient = new QueryClient();
+const signUpEmailStorageKey = "richespay_dashboard_signup_email";
 
 interface AuthContextValue {
   accessToken: string | null;
@@ -168,26 +28,6 @@ interface AuthContextValue {
   session: Session | null;
   signOutEverywhere: () => Promise<void>;
 }
-
-const queryClient = new QueryClient();
-const roleOptions = [
-  { label: "Owner", value: "owner" },
-  { label: "Admin", value: "admin" },
-  { label: "Finance", value: "finance" },
-  { label: "Developer", value: "developer" },
-  { label: "Support", value: "support" },
-  { label: "Viewer", value: "viewer" }
-] as const;
-const countryOptions = [
-  { label: "Ghana", value: "GH" },
-  { label: "Zambia", value: "ZM" },
-  { label: "Other", value: "OTHER" }
-] as const;
-const lastActivityStorageKey = "richespay_dashboard_last_activity";
-const selectedMerchantStorageKey = "richespay_dashboard_merchant_id";
-const signUpEmailStorageKey = "richespay_dashboard_signup_email";
-const inviteTokenStorageKey = "richespay_dashboard_invite_token";
-const dashboardIdleTimeoutMs = 12 * 60 * 60 * 1000;
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
 
@@ -207,15 +47,12 @@ function DashboardAuthProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     let mounted = true;
 
-    const bootstrap = async () => {
-      const { data } = await supabase.auth.getSession();
+    void supabase.auth.getSession().then(({ data }) => {
       if (mounted) {
         setSession(data.session);
         setLoading(false);
       }
-    };
-
-    void bootstrap();
+    });
 
     const {
       data: { subscription }
@@ -229,50 +66,6 @@ function DashboardAuthProvider({ children }: { children: React.ReactNode }) {
       subscription.unsubscribe();
     };
   }, []);
-
-  React.useEffect(() => {
-    if (!session) {
-      return;
-    }
-
-    const markActivity = () => {
-      window.localStorage.setItem(
-        lastActivityStorageKey,
-        String(Date.now())
-      );
-    };
-
-    markActivity();
-
-    const events: Array<keyof WindowEventMap> = [
-      "click",
-      "keydown",
-      "mousemove",
-      "scroll",
-      "touchstart"
-    ];
-
-    events.forEach((eventName) => {
-      window.addEventListener(eventName, markActivity, { passive: true });
-    });
-
-    const interval = window.setInterval(() => {
-      const lastActivity = Number(
-        window.localStorage.getItem(lastActivityStorageKey) ?? "0"
-      );
-
-      if (Date.now() - lastActivity > dashboardIdleTimeoutMs) {
-        void supabase.auth.signOut({ scope: "local" });
-      }
-    }, 60_000);
-
-    return () => {
-      events.forEach((eventName) => {
-        window.removeEventListener(eventName, markActivity);
-      });
-      window.clearInterval(interval);
-    };
-  }, [session]);
 
   const value = React.useMemo<AuthContextValue>(
     () => ({
@@ -322,11 +115,11 @@ function AuthSplitLayout({
               RichesPay
             </div>
             <h2 className="text-4xl font-semibold tracking-tight text-text">
-              Calm access for every merchant and every team.
+              Premium merchant operations for payments and messaging.
             </h2>
             <p className="text-base text-text-secondary">
-              Email verification, merchant-aware access, and TOTP protection for
-              the roles that move money and manage the team.
+              Sign in securely, switch between test and live, and manage every
+              active product from one dashboard.
             </p>
           </div>
         </aside>
@@ -362,128 +155,107 @@ function DashboardProtectedRoute() {
 }
 
 function SignInPage() {
-  const { pushToast } = useToast();
   const auth = useDashboardAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { pushToast } = useToast();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [loading, setLoading] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const from = (location.state as { from?: string } | null)?.from ?? "/app/overview";
+
+  if (auth.session) {
+    return <Navigate replace to={from} />;
+  }
 
   return (
     <AuthSplitLayout
       eyebrow="Dashboard"
-      subtitle="Sign in with your work email. Owners, admins, and finance users will be prompted for TOTP before merchant access opens."
-      title="Welcome back"
+      subtitle="Use your verified merchant account to access the RichesPay dashboard."
+      title="Sign in"
     >
       <form
         className="space-y-4"
         onSubmit={async (event) => {
           event.preventDefault();
-          setLoading(true);
+          setSubmitting(true);
 
           const { error } = await supabase.auth.signInWithPassword({
             email,
             password
           });
 
-          setLoading(false);
+          setSubmitting(false);
 
           if (error) {
             pushToast({
-              description: error.message,
               title: "Sign-in failed",
+              description: error.message,
               variant: "danger"
             });
             return;
           }
 
-          navigate("/app", { replace: true });
+          navigate(from, { replace: true });
         }}
       >
         <Input
           autoComplete="email"
           label="Email"
-          onChange={(event) => {
-            setEmail(event.target.value);
-          }}
+          onChange={(event) => setEmail(event.target.value)}
           type="email"
           value={email}
         />
         <Input
           autoComplete="current-password"
           label="Password"
-          onChange={(event) => {
-            setPassword(event.target.value);
-          }}
+          onChange={(event) => setPassword(event.target.value)}
           type="password"
           value={password}
         />
-        <Button className="w-full" loading={loading} type="submit" variant="primary">
+        <Button className="w-full" loading={submitting} type="submit" variant="primary">
           Sign in
         </Button>
-      </form>
-      <div className="mt-5 flex flex-col gap-3 text-sm text-text-secondary">
-        <Link className="text-brand hover:underline" to="/forgot-password">
-          Forgot your password?
-        </Link>
-        <p>
-          New to RichesPay?{" "}
-          <Link className="text-brand hover:underline" to="/sign-up">
-            Create your merchant account
+        <div className="flex flex-wrap justify-between gap-3 text-sm">
+          <Link className="text-brand underline" to="/forgot-password">
+            Forgot password
           </Link>
-        </p>
-        {auth.session ? (
-          <Button
-            className="justify-start px-0"
-            onClick={() => {
-              void auth.signOutEverywhere();
-            }}
-            variant="ghost"
-          >
-            <LogOut className="size-4" />
-            Sign out everywhere
-          </Button>
-        ) : null}
-      </div>
+          <Link className="text-brand underline" to="/sign-up">
+            Create account
+          </Link>
+        </div>
+      </form>
     </AuthSplitLayout>
   );
 }
 
 function SignUpPage() {
-  const { pushToast } = useToast();
   const navigate = useNavigate();
+  const { pushToast } = useToast();
   const [businessName, setBusinessName] = React.useState("");
   const [countryCode, setCountryCode] = React.useState("GH");
   const [email, setEmail] = React.useState("");
   const [fullName, setFullName] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [loading, setLoading] = React.useState(false);
-  const settlementCurrency = settlementCurrencyForCountry(
-    countryCode === "OTHER" ? "OTHER" : countryCode
-  );
+  const [submitting, setSubmitting] = React.useState(false);
 
   return (
     <AuthSplitLayout
-      eyebrow="Onboarding"
-      subtitle="Create a verified RichesPay account, lock in your settlement currency, and start in pending KYB."
-      title="Create your merchant account"
+      eyebrow="Dashboard"
+      subtitle="Create a merchant owner account and start onboarding your business."
+      title="Create your account"
     >
       <form
         className="space-y-4"
         onSubmit={async (event) => {
           event.preventDefault();
-          setLoading(true);
+          setSubmitting(true);
 
           try {
-            await apiRequest<{
-              merchant_id: string;
-              settlement_currency: string;
-              user_id: string;
-              verification_required: true;
-            }>("/dashboard/v1/auth/sign-up", {
+            await apiRequest("/dashboard/v1/auth/sign-up", {
               body: JSON.stringify({
                 business_name: businessName,
-                country_code: countryCode === "OTHER" ? "KE" : countryCode,
+                country_code: countryCode,
                 email,
                 full_name: fullName,
                 password
@@ -492,134 +264,51 @@ function SignUpPage() {
             });
 
             window.localStorage.setItem(signUpEmailStorageKey, email);
-            navigate("/verify-email", { replace: true });
+            navigate("/verify-email");
           } catch (error) {
             pushToast({
-              description:
-                error instanceof ApiError ? error.message : "Unable to sign up",
               title: "Sign-up failed",
+              description: error instanceof ApiError ? error.message : "Unable to create the account.",
               variant: "danger"
             });
           } finally {
-            setLoading(false);
+            setSubmitting(false);
           }
         }}
       >
-        <Input
-          label="Full name"
-          onChange={(event) => {
-            setFullName(event.target.value);
-          }}
-          value={fullName}
-        />
-        <Input
-          label="Business name"
-          onChange={(event) => {
-            setBusinessName(event.target.value);
-          }}
-          value={businessName}
-        />
-        <Select
-          label="Country"
-          onValueChange={setCountryCode}
-          options={countryOptions}
-          value={countryCode}
-        />
-        <div className="rounded-input border border-border bg-surface-subtle px-4 py-3">
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-text-muted">
-            Settlement currency
-          </p>
-          <p className="mt-2 text-base font-semibold text-text">
-            Your settlement currency: {settlementCurrency}
-          </p>
-          <p className="mt-1 text-sm text-text-secondary">
-            This is locked after country selection.
-          </p>
-        </div>
-        <Input
-          autoComplete="email"
-          label="Email"
-          onChange={(event) => {
-            setEmail(event.target.value);
-          }}
-          type="email"
-          value={email}
-        />
-        <Input
-          autoComplete="new-password"
-          label="Password"
-          onChange={(event) => {
-            setPassword(event.target.value);
-          }}
-          type="password"
-          value={password}
-        />
-        <Button className="w-full" loading={loading} type="submit" variant="primary">
+        <Input label="Business name" onChange={(event) => setBusinessName(event.target.value)} value={businessName} />
+        <Input label="Country code" onChange={(event) => setCountryCode(event.target.value.toUpperCase())} value={countryCode} />
+        <Input label="Full name" onChange={(event) => setFullName(event.target.value)} value={fullName} />
+        <Input label="Email" onChange={(event) => setEmail(event.target.value)} type="email" value={email} />
+        <Input label="Password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
+        <Button className="w-full" loading={submitting} type="submit" variant="primary">
           Create account
         </Button>
+        <p className="text-sm text-text-secondary">
+          Your settlement currency is fixed from the onboarding country.
+        </p>
       </form>
-      <p className="mt-5 text-sm text-text-secondary">
-        Already have an account?{" "}
-        <Link className="text-brand hover:underline" to="/sign-in">
-          Sign in
-        </Link>
-      </p>
     </AuthSplitLayout>
   );
 }
 
 function VerifyEmailPage() {
-  const { pushToast } = useToast();
-  const storedEmail = window.localStorage.getItem(signUpEmailStorageKey) ?? "";
-  const [email, setEmail] = React.useState(storedEmail);
-  const [loading, setLoading] = React.useState(false);
+  const email = window.localStorage.getItem(signUpEmailStorageKey);
 
   return (
     <AuthSplitLayout
-      eyebrow="Verify Email"
-      subtitle="Check your inbox for the RichesPay verification link before signing in."
+      eyebrow="Dashboard"
+      subtitle="Check your inbox, verify the email, then come back here to sign in."
       title="Verify your email"
     >
-      <div className="space-y-4">
-        <div className="rounded-card border border-border bg-surface-subtle p-4 text-sm text-text-secondary">
-          We sent a verification email to <strong className="text-text">{email}</strong>.
-        </div>
-        <Input
-          label="Email"
-          onChange={(event) => {
-            setEmail(event.target.value);
-          }}
-          type="email"
-          value={email}
-        />
-        <Button
-          className="w-full"
-          loading={loading}
-          onClick={async () => {
-            setLoading(true);
-
-            const { error } = await supabase.auth.resend({
-              email,
-              options: {
-                emailRedirectTo: `${window.location.origin}/verify-email`
-              },
-              type: "signup"
-            });
-
-            setLoading(false);
-
-            pushToast({
-              description: error ? error.message : "A fresh verification email is on the way.",
-              title: error ? "Unable to resend" : "Verification email sent",
-              variant: error ? "danger" : "success"
-            });
-          }}
-          variant="primary"
-        >
-          Resend verification email
-        </Button>
-        <Link className="text-sm text-brand hover:underline" to="/sign-in">
-          I have already verified my email
+      <div className="space-y-4 text-sm text-text-secondary">
+        <p>We sent a verification link to {email ?? "your email address"}.</p>
+        <p>
+          Once verified, you can sign in and continue with KYB, settlement
+          setup, and your first test transaction.
+        </p>
+        <Link to="/sign-in">
+          <Button variant="primary">Back to sign in</Button>
         </Link>
       </div>
     </AuthSplitLayout>
@@ -628,210 +317,170 @@ function VerifyEmailPage() {
 
 function SetupTwoFactorPage() {
   const { pushToast } = useToast();
-  const auth = useDashboardAuth();
-  const navigate = useNavigate();
-  const [factorId, setFactorId] = React.useState<string | null>(null);
+  const [factorId, setFactorId] = React.useState("");
   const [qrCode, setQrCode] = React.useState<string | null>(null);
-  const [secret, setSecret] = React.useState<string | null>(null);
+  const [secret, setSecret] = React.useState("");
   const [code, setCode] = React.useState("");
   const [loading, setLoading] = React.useState(false);
 
-  React.useEffect(() => {
-    if (!auth.session) {
-      navigate("/sign-in", { replace: true });
+  async function handleEnroll() {
+    setLoading(true);
+    const { data, error } = await supabase.auth.mfa.enroll({
+      factorType: "totp",
+      friendlyName: "RichesPay dashboard"
+    });
+    setLoading(false);
+
+    if (error || !data) {
+      pushToast({
+        title: "2FA setup failed",
+        description: error?.message ?? "Unable to start TOTP setup.",
+        variant: "danger"
+      });
       return;
     }
 
-    void (async () => {
-      const { data } = await supabase.auth.mfa.listFactors();
-      const existingFactor = data?.totp[0];
+    setFactorId(data.id);
+    setQrCode(data.totp.qr_code);
+    setSecret(data.totp.secret);
+  }
 
-      if (existingFactor) {
-        setFactorId(existingFactor.id);
-        return;
-      }
+  async function handleVerify() {
+    if (!factorId) {
+      return;
+    }
 
-      const { data: enrollment, error } = await supabase.auth.mfa.enroll({
-        factorType: "totp",
-        friendlyName: "RichesPay Dashboard"
+    setLoading(true);
+    const challenge = await supabase.auth.mfa.challenge({ factorId });
+
+    if (challenge.error || !challenge.data) {
+      setLoading(false);
+      pushToast({
+        title: "2FA challenge failed",
+        description: challenge.error?.message ?? "Unable to create the TOTP challenge.",
+        variant: "danger"
       });
+      return;
+    }
 
-      if (error || !enrollment) {
-        pushToast({
-          description: error?.message ?? "Unable to start TOTP setup",
-          title: "2FA setup failed",
-          variant: "danger"
-        });
-        return;
-      }
+    const verified = await supabase.auth.mfa.verify({
+      factorId,
+      challengeId: challenge.data.id,
+      code
+    });
+    setLoading(false);
 
-      setFactorId(enrollment.id);
-      setQrCode(enrollment.totp.qr_code);
-      setSecret(enrollment.totp.secret);
-    })();
-  }, [auth.session, navigate, pushToast]);
+    if (verified.error) {
+      pushToast({
+        title: "Verification failed",
+        description: verified.error.message,
+        variant: "danger"
+      });
+      return;
+    }
+
+    pushToast({
+      title: "2FA enabled",
+      description: "Your TOTP factor is ready to use.",
+      variant: "success"
+    });
+  }
 
   return (
     <AuthSplitLayout
-      eyebrow="TOTP Setup"
-      subtitle="Owners, admins, and finance users need an AAL2 session before dashboard access is granted."
-      title="Set up two-factor authentication"
+      eyebrow="Dashboard"
+      subtitle="Set up a TOTP second factor for roles that move money or manage access."
+      title="Set up 2FA"
     >
       <div className="space-y-4">
-        {qrCode ? (
-          <div
-            className="rounded-card border border-border bg-white p-4"
-            dangerouslySetInnerHTML={{ __html: qrCode }}
-          />
+        {!factorId ? (
+          <Button loading={loading} onClick={() => void handleEnroll()} variant="primary">
+            Generate QR code
+          </Button>
         ) : (
-          <div className="rounded-card border border-border bg-surface-subtle p-4 text-sm text-text-secondary">
-            If you already enrolled TOTP, enter a fresh code from your authenticator app below.
-          </div>
+          <>
+            {qrCode ? (
+              <img
+                alt="RichesPay TOTP QR code"
+                className="h-48 w-48 rounded-card border border-border bg-white p-3"
+                src={qrCode}
+              />
+            ) : null}
+            <Input label="Secret" readOnly value={secret} />
+            <Input label="Authenticator code" onChange={(event) => setCode(event.target.value)} value={code} />
+            <Button loading={loading} onClick={() => void handleVerify()} variant="primary">
+              Verify code
+            </Button>
+          </>
         )}
-        {secret ? <CopyField label="Manual setup key" value={secret} /> : null}
-        <Input
-          label="Authentication code"
-          onChange={(event) => {
-            setCode(event.target.value);
-          }}
-          value={code}
-        />
-        <Button
-          className="w-full"
-          loading={loading}
-          onClick={async () => {
-            if (!factorId) {
-              return;
-            }
-
-            setLoading(true);
-            const { data: challenge, error: challengeError } =
-              await supabase.auth.mfa.challenge({ factorId });
-
-            if (challengeError || !challenge) {
-              setLoading(false);
-              pushToast({
-                description:
-                  challengeError?.message ?? "Unable to challenge TOTP factor",
-                title: "2FA challenge failed",
-                variant: "danger"
-              });
-              return;
-            }
-
-            const { error } = await supabase.auth.mfa.verify({
-              challengeId: challenge.id,
-              code,
-              factorId
-            });
-
-            setLoading(false);
-
-            if (error) {
-              pushToast({
-                description: error.message,
-                title: "Verification failed",
-                variant: "danger"
-              });
-              return;
-            }
-
-            navigate("/app", { replace: true });
-          }}
-          variant="primary"
-        >
-          Verify and continue
-        </Button>
       </div>
     </AuthSplitLayout>
   );
 }
 
 function EnterTwoFactorPage() {
-  const { pushToast } = useToast();
-  const auth = useDashboardAuth();
   const navigate = useNavigate();
+  const { pushToast } = useToast();
   const [code, setCode] = React.useState("");
   const [loading, setLoading] = React.useState(false);
 
   return (
     <AuthSplitLayout
-      eyebrow="Two-Factor Authentication"
-      subtitle="Enter the 6-digit code from your authenticator app to continue."
-      title="Confirm your sign-in"
+      eyebrow="Dashboard"
+      subtitle="Enter the code from your authenticator app to continue."
+      title="Complete 2FA"
     >
       <div className="space-y-4">
-        <Input
-          label="Authentication code"
-          onChange={(event) => {
-            setCode(event.target.value);
-          }}
-          value={code}
-        />
+        <Input label="Authenticator code" onChange={(event) => setCode(event.target.value)} value={code} />
         <Button
-          className="w-full"
           loading={loading}
           onClick={async () => {
-            if (!auth.session) {
-              navigate("/sign-in", { replace: true });
-              return;
-            }
-
             setLoading(true);
-            const { data, error: listError } = await supabase.auth.mfa.listFactors();
-            const factor = data?.totp[0];
+            const factors = await supabase.auth.mfa.listFactors();
+            const factorId = factors.data?.all?.[0]?.id;
 
-            if (listError || !factor) {
-              setLoading(false);
-              navigate("/setup-2fa", { replace: true });
-              return;
-            }
-
-            const { data: challenge, error: challengeError } =
-              await supabase.auth.mfa.challenge({ factorId: factor.id });
-
-            if (challengeError || !challenge) {
+            if (!factorId) {
               setLoading(false);
               pushToast({
-                description:
-                  challengeError?.message ?? "Unable to request a TOTP challenge",
-                title: "2FA challenge failed",
+                title: "No factor found",
+                description: "Set up TOTP first before entering a code.",
+                variant: "warning"
+              });
+              return;
+            }
+
+            const challenge = await supabase.auth.mfa.challenge({ factorId });
+            if (challenge.error || !challenge.data) {
+              setLoading(false);
+              pushToast({
+                title: "Challenge failed",
+                description: challenge.error?.message ?? "Unable to create a 2FA challenge.",
                 variant: "danger"
               });
               return;
             }
 
-            const { error } = await supabase.auth.mfa.verify({
-              challengeId: challenge.id,
-              code,
-              factorId: factor.id
+            const verified = await supabase.auth.mfa.verify({
+              factorId,
+              challengeId: challenge.data.id,
+              code
             });
-
             setLoading(false);
 
-            if (error) {
+            if (verified.error) {
               pushToast({
-                description: error.message,
                 title: "Verification failed",
+                description: verified.error.message,
                 variant: "danger"
               });
               return;
             }
 
-            navigate("/app", { replace: true });
+            navigate("/app/overview", { replace: true });
           }}
           variant="primary"
         >
-          Verify code
-        </Button>
-        <Button
-          className="w-full"
-          onClick={() => {
-            navigate("/setup-2fa");
-          }}
-          variant="secondary"
-        >
-          Set up TOTP instead
+          Continue
         </Button>
       </div>
     </AuthSplitLayout>
@@ -845,40 +494,39 @@ function ForgotPasswordPage() {
 
   return (
     <AuthSplitLayout
-      eyebrow="Password Reset"
-      subtitle="We’ll send a reset link to the email on your RichesPay account."
-      title="Forgot your password?"
+      eyebrow="Dashboard"
+      subtitle="Request a password reset email for your RichesPay dashboard account."
+      title="Reset password"
     >
       <div className="space-y-4">
-        <Input
-          label="Email"
-          onChange={(event) => {
-            setEmail(event.target.value);
-          }}
-          type="email"
-          value={email}
-        />
+        <Input label="Email" onChange={(event) => setEmail(event.target.value)} type="email" value={email} />
         <Button
-          className="w-full"
           loading={loading}
           onClick={async () => {
             setLoading(true);
-
             const { error } = await supabase.auth.resetPasswordForEmail(email, {
               redirectTo: `${window.location.origin}/sign-in`
             });
-
             setLoading(false);
 
+            if (error) {
+              pushToast({
+                title: "Reset failed",
+                description: error.message,
+                variant: "danger"
+              });
+              return;
+            }
+
             pushToast({
-              description: error ? error.message : "Check your inbox for the reset link.",
-              title: error ? "Reset failed" : "Reset link sent",
-              variant: error ? "danger" : "success"
+              title: "Reset email sent",
+              description: "Check your inbox for the password reset link.",
+              variant: "success"
             });
           }}
           variant="primary"
         >
-          Send reset link
+          Send reset email
         </Button>
       </div>
     </AuthSplitLayout>
@@ -886,12 +534,17 @@ function ForgotPasswordPage() {
 }
 
 function AcceptInvitePage() {
-  const { pushToast } = useToast();
   const auth = useDashboardAuth();
   const navigate = useNavigate();
+  const { pushToast } = useToast();
   const [searchParams] = useSearchParams();
-  const token = searchParams.get("token") ?? window.localStorage.getItem(inviteTokenStorageKey) ?? "";
-  const [preview, setPreview] = React.useState<InvitePreview | null>(null);
+  const token = searchParams.get("token");
+  const [preview, setPreview] = React.useState<{
+    email: string;
+    expires_at: string;
+    merchant_id: string;
+    role: string;
+  } | null>(null);
   const [loading, setLoading] = React.useState(false);
 
   React.useEffect(() => {
@@ -899,82 +552,54 @@ function AcceptInvitePage() {
       return;
     }
 
-    window.localStorage.setItem(inviteTokenStorageKey, token);
-
-    void (async () => {
-      try {
-        const data = await apiRequest<InvitePreview>(
-          `/dashboard/v1/auth/invitations/${token}`
-        );
-        setPreview(data);
-      } catch (error) {
-        pushToast({
-          description:
-            error instanceof ApiError ? error.message : "Unable to load invitation",
-          title: "Invitation unavailable",
-          variant: "danger"
-        });
-      }
-    })();
-  }, [pushToast, token]);
+    void apiRequest(`/dashboard/v1/auth/invitations/${token}`)
+      .then((data) => {
+        setPreview(data as typeof preview);
+      })
+      .catch(() => {
+        setPreview(null);
+      });
+  }, [token]);
 
   return (
     <AuthSplitLayout
-      eyebrow="Accept Invite"
-      subtitle="Join the merchant team with the role that was assigned to you."
-      title="You’ve been invited"
+      eyebrow="Dashboard"
+      subtitle="Accept your merchant invite after signing in to the dashboard."
+      title="Accept invite"
     >
       <div className="space-y-4">
         {preview ? (
           <div className="rounded-card border border-border bg-surface-subtle p-4 text-sm text-text-secondary">
-            <p>
-              Invitation for <strong className="text-text">{preview.email}</strong>
-            </p>
-            <p className="mt-2">
-              Merchant: <strong className="text-text">{preview.merchant_id}</strong>
-            </p>
-            <p className="mt-1">
-              Role: <strong className="text-text">{preview.role}</strong>
-            </p>
+            <p className="font-medium text-text">Invite preview</p>
+            <p className="mt-2">Email: {preview.email}</p>
+            <p>Role: {preview.role}</p>
+            <p>Expires: {new Date(preview.expires_at).toLocaleString()}</p>
           </div>
+        ) : null}
+        {!auth.session ? (
+          <Link to="/sign-in">
+            <Button variant="primary">Sign in to accept</Button>
+          </Link>
         ) : (
-          <div className="rounded-card border border-border bg-surface-subtle p-4 text-sm text-text-secondary">
-            Loading invitation details...
-          </div>
-        )}
-        {auth.session ? (
           <Button
-            className="w-full"
             loading={loading}
             onClick={async () => {
-              if (!auth.accessToken || !token) {
+              if (!token) {
                 return;
               }
 
               setLoading(true);
-
               try {
-                const data = await apiRequest<{
-                  merchant_id: string;
-                  mode: MerchantMode;
-                  role: MerchantRole;
-                }>("/dashboard/v1/auth/accept-invite", {
+                await apiRequest("/dashboard/v1/auth/accept-invite", {
                   accessToken: auth.accessToken,
                   body: JSON.stringify({ token }),
                   method: "POST"
                 });
-
-                window.localStorage.setItem(
-                  selectedMerchantStorageKey,
-                  data.merchant_id
-                );
-                window.localStorage.removeItem(inviteTokenStorageKey);
-                navigate("/app", { replace: true });
+                navigate("/app/overview", { replace: true });
               } catch (error) {
                 pushToast({
-                  description:
-                    error instanceof ApiError ? error.message : "Unable to accept the invitation",
-                  title: "Invite acceptance failed",
+                  title: "Invite failed",
+                  description: error instanceof ApiError ? error.message : "Unable to accept the invite.",
                   variant: "danger"
                 });
               } finally {
@@ -983,1089 +608,17 @@ function AcceptInvitePage() {
             }}
             variant="primary"
           >
-            Accept invitation
+            Accept invite
           </Button>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-text-secondary">
-              Sign in first, then come back here to accept the invite.
-            </p>
-            <Link className="text-sm text-brand hover:underline" to="/sign-in">
-              Go to sign in
-            </Link>
-          </div>
         )}
       </div>
     </AuthSplitLayout>
   );
 }
 
-function DashboardHomePage() {
-  const { pushToast } = useToast();
+function DashboardWorkspacePage() {
   const auth = useDashboardAuth();
-  const navigate = useNavigate();
-  const [memberships, setMemberships] = React.useState<MembershipSummary[]>([]);
-  const [selectedMerchantId, setSelectedMerchantId] = React.useState<string>(
-    window.localStorage.getItem(selectedMerchantStorageKey) ?? ""
-  );
-  const [sessionData, setSessionData] = React.useState<DashboardSessionData | null>(null);
-  const [members, setMembers] = React.useState<TeamMember[]>([]);
-  const [topups, setTopups] = React.useState<DashboardTopup[]>([]);
-  const [topupSettings, setTopupSettings] = React.useState<DashboardTopupSettings | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [inviteOpen, setInviteOpen] = React.useState(false);
-  const [topupDrawerOpen, setTopupDrawerOpen] = React.useState(false);
-  const [inviteEmail, setInviteEmail] = React.useState("");
-  const [inviteRole, setInviteRole] = React.useState<MerchantRole>("viewer");
-  const [latestInviteUrl, setLatestInviteUrl] = React.useState<string | null>(null);
-  const [editingMember, setEditingMember] = React.useState<TeamMember | null>(null);
-  const [nextRole, setNextRole] = React.useState<MerchantRole>("viewer");
-  const [busyMemberId, setBusyMemberId] = React.useState<string | null>(null);
-  const [topupAmount, setTopupAmount] = React.useState("1500");
-  const [topupPhone, setTopupPhone] = React.useState("+233241230001");
-  const [topupNetwork, setTopupNetwork] = React.useState("mtn_momo");
-  const [topupCurrency, setTopupCurrency] = React.useState("GHS");
-  const [thresholdMinor, setThresholdMinor] = React.useState("500");
-  const [topupBusy, setTopupBusy] = React.useState(false);
-  const [thresholdBusy, setThresholdBusy] = React.useState(false);
-  const [selectedTopup, setSelectedTopup] = React.useState<DashboardTopup | null>(null);
-
-  React.useEffect(() => {
-    if (!auth.accessToken) {
-      return;
-    }
-
-    void (async () => {
-      try {
-        const data = await apiRequest<MembershipSummary[]>(
-          "/dashboard/v1/auth/memberships",
-          {
-            accessToken: auth.accessToken
-          }
-        );
-        setMemberships(data);
-
-        const preferredMerchant =
-          data.find((membership) => membership.merchant_id === selectedMerchantId)
-            ?.merchant_id ?? data[0]?.merchant_id ?? "";
-
-        if (preferredMerchant) {
-          setSelectedMerchantId(preferredMerchant);
-          window.localStorage.setItem(
-            selectedMerchantStorageKey,
-            preferredMerchant
-          );
-        }
-      } catch (error) {
-        pushToast({
-          description:
-            error instanceof ApiError ? error.message : "Unable to load memberships",
-          title: "Memberships unavailable",
-          variant: "danger"
-        });
-      }
-    })();
-  }, [auth.accessToken, pushToast, selectedMerchantId]);
-
-  React.useEffect(() => {
-    if (!auth.accessToken || !selectedMerchantId) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-
-    void (async () => {
-      try {
-        const session = await apiRequest<DashboardSessionData>(
-          "/dashboard/v1/session",
-          {
-            accessToken: auth.accessToken,
-            merchantId: selectedMerchantId
-          }
-        );
-        setSessionData(session);
-
-        const teamMembers = await apiRequest<TeamMember[]>(
-          "/dashboard/v1/team/members",
-          {
-            accessToken: auth.accessToken,
-            merchantId: selectedMerchantId
-          }
-        );
-        setMembers(teamMembers);
-
-        const [loadedTopups, loadedTopupSettings] = await Promise.all([
-          apiRequest<DashboardTopup[]>("/dashboard/v1/topups", {
-            accessToken: auth.accessToken,
-            merchantId: selectedMerchantId
-          }),
-          apiRequest<DashboardTopupSettings>("/dashboard/v1/topups/settings", {
-            accessToken: auth.accessToken,
-            merchantId: selectedMerchantId
-          })
-        ]);
-
-        setTopups(loadedTopups);
-        setTopupSettings(loadedTopupSettings);
-        setTopupCurrency(session.settlement_currency);
-        setThresholdMinor(
-          String(
-            loadedTopupSettings.thresholds.find(
-              (threshold) => threshold.currency === session.settlement_currency
-            )?.threshold_minor ?? 500
-          )
-        );
-      } catch (error) {
-        if (error instanceof ApiError && error.code === "mfa_required") {
-          navigate("/enter-2fa", { replace: true });
-          return;
-        }
-
-        pushToast({
-          description:
-            error instanceof ApiError ? error.message : "Unable to load dashboard session",
-          title: "Dashboard unavailable",
-          variant: "danger"
-        });
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [auth.accessToken, navigate, pushToast, selectedMerchantId]);
-
-  const membershipOptions = memberships.map((membership) => ({
-    label: `${membership.merchant_name} (${membership.mode})`,
-    value: membership.merchant_id
-  }));
-  const isMerchantSuspended = sessionData?.compliance.status === "suspended";
-
-  const columns = React.useMemo<ColumnDef<TeamMember>[]>(
-    () => [
-      {
-        accessorKey: "full_name",
-        header: "Name",
-        cell: ({ row }) => row.original.full_name ?? "No profile name"
-      },
-      {
-        accessorKey: "email",
-        header: "Email",
-        cell: ({ row }) => row.original.email ?? "No email"
-      },
-      {
-        accessorKey: "role",
-        header: "Role",
-        cell: ({ row }) => row.original.role
-      },
-      {
-        id: "actions",
-        header: "Actions",
-        cell: ({ row }) => (
-          <div className="flex gap-2">
-            <Button
-              disabled={isMerchantSuspended}
-              onClick={() => {
-                setEditingMember(row.original);
-                setNextRole(row.original.role);
-              }}
-              variant="ghost"
-            >
-              Change role
-            </Button>
-            <Button
-              disabled={isMerchantSuspended}
-              onClick={async () => {
-                if (!auth.accessToken || !sessionData) {
-                  return;
-                }
-
-                setBusyMemberId(row.original.user_id);
-
-                try {
-                  await apiRequest<{ removed: true }>(
-                    `/dashboard/v1/team/members/${row.original.user_id}`,
-                    {
-                      accessToken: auth.accessToken,
-                      merchantId: sessionData.merchant_id,
-                      method: "DELETE"
-                    }
-                  );
-
-                  setMembers((current) =>
-                    current.filter((member) => member.user_id !== row.original.user_id)
-                  );
-                } catch (error) {
-                  pushToast({
-                    description:
-                      error instanceof ApiError ? error.message : "Unable to remove member",
-                    title: "Member removal failed",
-                    variant: "danger"
-                  });
-                } finally {
-                  setBusyMemberId(null);
-                }
-              }}
-              variant="danger"
-            >
-              {busyMemberId === row.original.user_id ? "Removing..." : "Remove"}
-            </Button>
-          </div>
-        )
-      }
-    ],
-    [auth.accessToken, busyMemberId, isMerchantSuspended, pushToast, sessionData]
-  );
-
-  const topupColumns = React.useMemo<ColumnDef<DashboardTopup>[]>(
-    () => [
-      {
-        accessorKey: "created_at",
-        header: "Created",
-        cell: ({ row }) =>
-          new Date(row.original.created_at).toLocaleString()
-      },
-      {
-        accessorKey: "method",
-        header: "Method",
-        cell: ({ row }) => row.original.method.replace("_", " ")
-      },
-      {
-        accessorKey: "amount",
-        header: "Amount",
-        cell: ({ row }) =>
-          formatMoney(
-            BigInt(row.original.amount),
-            row.original.currency as "GHS" | "USD" | "ZMW",
-            "en-US"
-          )
-      },
-      {
-        accessorKey: "status",
-        header: "Status",
-        cell: ({ row }) => row.original.status
-      }
-    ],
-    []
-  );
-
-  React.useEffect(() => {
-    if (!auth.accessToken || !sessionData || !selectedTopup || selectedTopup.status !== "pending") {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      void (async () => {
-        try {
-          const refreshed = await apiRequest<DashboardTopup>(
-            `/dashboard/v1/topups/${selectedTopup.id}`,
-            {
-              accessToken: auth.accessToken,
-              merchantId: sessionData.merchant_id
-            }
-          );
-
-          setSelectedTopup(refreshed);
-          setTopups((current) =>
-            current.map((topup) => (topup.id === refreshed.id ? refreshed : topup))
-          );
-        } catch {
-          // Keep polling light and silent inside the drawer.
-        }
-      })();
-    }, 3000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [auth.accessToken, selectedTopup, sessionData]);
-
-  if (loading) {
-    return (
-      <AuthSplitLayout
-        eyebrow="Dashboard"
-        subtitle="Loading your merchant workspace."
-        title="Preparing access"
-      >
-        <div className="space-y-4">
-          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
-          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
-          <div className="h-40 animate-pulse rounded-card bg-surface-subtle" />
-        </div>
-      </AuthSplitLayout>
-    );
-  }
-
-  if (memberships.length === 0 || !sessionData) {
-    return (
-      <AuthSplitLayout
-        eyebrow="Dashboard"
-        subtitle="You can join another merchant with an invite or complete onboarding on a new account."
-        title="No merchant access yet"
-      >
-        <EmptyState
-          action={
-            <Link to="/accept-invite">
-              <Button variant="primary">Accept an invite</Button>
-            </Link>
-          }
-          description="Your user is signed in, but there are no merchant memberships on this account yet."
-          icon={<UserPlus className="size-5" />}
-          title="No merchant memberships"
-        />
-      </AuthSplitLayout>
-    );
-  }
-
-  const isSuspended = sessionData.compliance.status === "suspended";
-  const complianceBanners = [
-    isSuspended
-      ? {
-          category: formatComplianceCategoryLabel(
-            sessionData.compliance.suspension_category
-          ),
-          reason: sessionData.compliance.suspension_reason,
-          tone: "border-danger/30 bg-danger/10 text-danger"
-        }
-      : null,
-    sessionData.compliance.collections_frozen
-      ? {
-          category: formatComplianceCategoryLabel(
-            sessionData.compliance.collections_freeze_category
-          ),
-          reason: sessionData.compliance.collections_freeze_reason,
-          tone: "border-warning/40 bg-warning/10 text-amber-900"
-        }
-      : null,
-    sessionData.compliance.payouts_frozen
-      ? {
-          category: formatComplianceCategoryLabel(
-            sessionData.compliance.payouts_freeze_category
-          ),
-          reason: sessionData.compliance.payouts_freeze_reason,
-          tone: "border-warning/40 bg-warning/10 text-amber-900"
-        }
-      : null
-  ].filter(Boolean);
-
-  return (
-    <>
-      <AppShell
-        activePath="/app"
-        mode={sessionData.mode}
-        navItems={[{ href: "/app", icon: <ShieldCheck className="size-4" />, label: "Team" }]}
-        onModeChange={(mode) => {
-          const alternative = memberships.find(
-            (membership) =>
-              membership.mode === mode &&
-              membership.merchant_name === sessionData.merchant_name
-          );
-
-          if (alternative) {
-            setSelectedMerchantId(alternative.merchant_id);
-            window.localStorage.setItem(
-              selectedMerchantStorageKey,
-              alternative.merchant_id
-            );
-            return;
-          }
-
-          pushToast({
-            description: `No ${mode} membership is available for this merchant yet.`,
-            title: "Mode not available",
-            variant: "warning"
-          });
-        }}
-        title="RichesPay Dashboard"
-        topBarContent={
-          <div className="flex items-center gap-3">
-            <Select
-              onValueChange={(value) => {
-                setSelectedMerchantId(value);
-                window.localStorage.setItem(selectedMerchantStorageKey, value);
-              }}
-              options={membershipOptions}
-              value={selectedMerchantId}
-            />
-            <Button
-              onClick={() => {
-                void auth.signOutEverywhere();
-              }}
-              variant="secondary"
-            >
-              <LogOut className="size-4" />
-              Sign out everywhere
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-6">
-          {complianceBanners.map((banner, index) =>
-            banner ? (
-              <div
-                className={`rounded-card border px-4 py-3 text-sm ${banner.tone}`}
-                key={`${banner.category ?? "notice"}-${index}`}
-              >
-                <p className="font-semibold">
-                  {isSuspended && index === 0
-                    ? "Merchant suspended"
-                    : index === 1 && sessionData.compliance.collections_frozen
-                      ? "Collections frozen"
-                      : "Payouts frozen"}
-                </p>
-                <p className="mt-1">
-                  {banner.category ? `${banner.category}. ` : ""}
-                  {banner.reason ?? "RichesPay has applied a temporary control to this merchant."}
-                </p>
-                <a
-                  className="mt-2 inline-flex text-sm underline"
-                  href={sessionData.compliance.contact_link}
-                >
-                  Contact RichesPay compliance
-                </a>
-              </div>
-            ) : null
-          )}
-          <PageHeader
-            action={
-              <div className="flex gap-3">
-                <Button
-                  disabled={isSuspended}
-                  onClick={() => {
-                    if (isSuspended) {
-                      return;
-                    }
-                    setSelectedTopup(null);
-                    setTopupDrawerOpen(true);
-                  }}
-                  variant="primary"
-                >
-                  Top up balance
-                </Button>
-                <Button
-                  disabled={isSuspended}
-                  leadingIcon={<Mail className="size-4" />}
-                  onClick={() => {
-                    if (isSuspended) {
-                      return;
-                    }
-                    setInviteOpen(true);
-                  }}
-                  variant="secondary"
-                >
-                  Invite teammate
-                </Button>
-              </div>
-            }
-            subtitle={`Signed in as ${sessionData.email ?? "unknown email"} with ${sessionData.role} access.`}
-            title={sessionData.merchant_name}
-          />
-          <div className="grid gap-4 md:grid-cols-3">
-            <StatCard
-              icon={<ShieldCheck className="size-4" />}
-              label="Your role"
-              value={sessionData.role}
-            />
-            <StatCard
-              icon={<Building2 className="size-4" />}
-              label="Settlement currency"
-              value={sessionData.settlement_currency}
-            />
-            <StatCard
-              icon={<KeyRound className="size-4" />}
-              label="Granted permissions"
-              value={String(sessionData.permissions.length)}
-            />
-          </div>
-          <DataTable
-            columns={columns}
-            data={members}
-            emptyState={
-              <EmptyState
-                description="Invite your first teammate to start sharing access."
-                title="No team members yet"
-              />
-            }
-            pageInfo={{
-              hasNextPage: false,
-              hasPreviousPage: false,
-              limit: members.length || 10
-            }}
-          />
-          <section className="space-y-4 rounded-card border border-border bg-white p-5 shadow-softer">
-            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-text">Balance top-ups</h2>
-                <p className="mt-1 text-sm text-text-secondary">
-                  Use mobile money, card, bank transfer, or test funds to add to your merchant balance.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <div className="rounded-input border border-border bg-surface-subtle px-4 py-3">
-                  <p className="text-xs uppercase tracking-[0.16em] text-text-muted">
-                    Bank transfer reference
-                  </p>
-                  <p className="mt-1 font-semibold text-text">
-                    {topupSettings?.transfer_reference ?? "Loading..."}
-                  </p>
-                </div>
-                {sessionData.mode === "test" ? (
-                  <Button
-                    disabled={isSuspended}
-                    onClick={async () => {
-                      if (!auth.accessToken) {
-                        return;
-                      }
-
-                      setTopupBusy(true);
-                      try {
-                        const created = await apiRequest<DashboardTopup>(
-                          "/dashboard/v1/topups/test-funds",
-                          {
-                            accessToken: auth.accessToken,
-                            body: JSON.stringify({
-                              amount: Number(topupAmount),
-                              currency: topupCurrency
-                            }),
-                            merchantId: sessionData.merchant_id,
-                            method: "POST"
-                          }
-                        );
-
-                        setTopups((current) => [created, ...current]);
-                        setSelectedTopup(created);
-                        setTopupDrawerOpen(true);
-                      } catch (error) {
-                        pushToast({
-                          description:
-                            error instanceof ApiError ? error.message : "Unable to add test funds",
-                          title: "Test funds failed",
-                          variant: "danger"
-                        });
-                      } finally {
-                        setTopupBusy(false);
-                      }
-                    }}
-                    variant="secondary"
-                  >
-                    Add test funds
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-            <div className="flex flex-col gap-3 md:flex-row md:items-end">
-              <Input
-                label={`Low-balance threshold (${sessionData.settlement_currency})`}
-                onChange={(event) => {
-                  setThresholdMinor(event.target.value);
-                }}
-                value={thresholdMinor}
-              />
-              <Button
-                disabled={isSuspended}
-                loading={thresholdBusy}
-                onClick={async () => {
-                  if (!auth.accessToken) {
-                    return;
-                  }
-
-                  setThresholdBusy(true);
-                  try {
-                    const threshold = await apiRequest<BalanceAlertThreshold>(
-                      `/dashboard/v1/topups/alerts/${sessionData.settlement_currency}`,
-                      {
-                        accessToken: auth.accessToken,
-                        body: JSON.stringify({
-                          threshold_minor: Number(thresholdMinor)
-                        }),
-                        merchantId: sessionData.merchant_id,
-                        method: "PUT"
-                      }
-                    );
-
-                    setTopupSettings((current) =>
-                      current
-                        ? {
-                            ...current,
-                            thresholds: [
-                              threshold,
-                              ...current.thresholds.filter(
-                                (entry) => entry.currency !== threshold.currency
-                              )
-                            ]
-                          }
-                        : current
-                    );
-                    pushToast({
-                      description: "Low-balance threshold saved.",
-                      title: "Threshold updated",
-                      variant: "success"
-                    });
-                  } catch (error) {
-                    pushToast({
-                      description:
-                        error instanceof ApiError ? error.message : "Unable to save threshold",
-                      title: "Threshold update failed",
-                      variant: "danger"
-                    });
-                  } finally {
-                    setThresholdBusy(false);
-                  }
-                }}
-                variant="secondary"
-              >
-                Save threshold
-              </Button>
-            </div>
-            <DataTable
-              columns={topupColumns}
-              data={topups}
-              emptyState={
-                <EmptyState
-                  description="Create your first balance top-up to fund payouts or SMS."
-                  title="No top-ups yet"
-                />
-              }
-              onRowClick={(row) => {
-                setSelectedTopup(row);
-                setTopupDrawerOpen(true);
-              }}
-              pageInfo={{
-                hasNextPage: false,
-                hasPreviousPage: false,
-                limit: topups.length || 10
-              }}
-            />
-          </section>
-        </div>
-      </AppShell>
-
-      <Modal
-        description="Send a role-based invite link to another team member."
-        onOpenChange={setInviteOpen}
-        open={inviteOpen}
-        title="Invite teammate"
-      >
-        <div className="space-y-4">
-          <Input
-            label="Teammate email"
-            onChange={(event) => {
-              setInviteEmail(event.target.value);
-            }}
-            type="email"
-            value={inviteEmail}
-          />
-          <Select
-            label="Role"
-            onValueChange={(value) => {
-              setInviteRole(value as MerchantRole);
-            }}
-            options={roleOptions}
-            value={inviteRole}
-          />
-          <Button
-            disabled={isSuspended}
-            className="w-full"
-            onClick={async () => {
-              if (!auth.accessToken || !sessionData) {
-                return;
-              }
-
-              try {
-                const data = await apiRequest<{
-                  expires_at: string;
-                  invite_url: string;
-                  role: MerchantRole;
-                }>("/dashboard/v1/team/invite", {
-                  accessToken: auth.accessToken,
-                  body: JSON.stringify({
-                    email: inviteEmail,
-                    role: inviteRole
-                  }),
-                  merchantId: sessionData.merchant_id,
-                  method: "POST"
-                });
-
-                setLatestInviteUrl(data.invite_url);
-                pushToast({
-                  description: "Invite link created. Share it securely with the teammate.",
-                  title: "Invite ready",
-                  variant: "success"
-                });
-              } catch (error) {
-                pushToast({
-                  description:
-                    error instanceof ApiError ? error.message : "Unable to create invite",
-                  title: "Invite failed",
-                  variant: "danger"
-                });
-              }
-            }}
-            variant="primary"
-          >
-            Create invite
-          </Button>
-          {latestInviteUrl ? <CopyField label="Invite URL" value={latestInviteUrl} /> : null}
-        </div>
-      </Modal>
-
-      <Drawer
-        description="Choose a funding method, start a top-up, and keep an eye on the live status."
-        onOpenChange={setTopupDrawerOpen}
-        open={topupDrawerOpen}
-        title="Top up balance"
-      >
-        <Tabs
-          defaultValue="mobile_money"
-          items={[
-            {
-              label: "Mobile money",
-              value: "mobile_money",
-              content: (
-                <div className="space-y-4">
-                  <Input
-                    label="Amount"
-                    onChange={(event) => {
-                      setTopupAmount(event.target.value);
-                    }}
-                    value={topupAmount}
-                  />
-                  <Select
-                    label="Currency"
-                    onValueChange={setTopupCurrency}
-                    options={[
-                      {
-                        label: sessionData.settlement_currency,
-                        value: sessionData.settlement_currency
-                      }
-                    ]}
-                    value={topupCurrency}
-                  />
-                  <Input
-                    label="Phone"
-                    onChange={(event) => {
-                      setTopupPhone(event.target.value);
-                    }}
-                    value={topupPhone}
-                  />
-                  <Select
-                    label="Network"
-                    onValueChange={setTopupNetwork}
-                    options={[
-                      { label: "MTN MoMo", value: "mtn_momo" },
-                      { label: "Telecel Cash", value: "telecel_cash" },
-                      { label: "AT Money", value: "at_money" }
-                    ]}
-                    value={topupNetwork}
-                  />
-                  <Button
-                    className="w-full"
-                    loading={topupBusy}
-                    onClick={async () => {
-                      if (!auth.accessToken) {
-                        return;
-                      }
-
-                      setTopupBusy(true);
-                      try {
-                        const created = await apiRequest<DashboardTopup>("/dashboard/v1/topups", {
-                          accessToken: auth.accessToken,
-                          body: JSON.stringify({
-                            amount: Number(topupAmount),
-                            currency: topupCurrency,
-                            method: "mobile_money",
-                            network: topupNetwork,
-                            phone: topupPhone
-                          }),
-                          merchantId: sessionData.merchant_id,
-                          method: "POST"
-                        });
-
-                        setSelectedTopup(created);
-                        setTopups((current) => [created, ...current]);
-                      } catch (error) {
-                        pushToast({
-                          description:
-                            error instanceof ApiError ? error.message : "Unable to create top-up",
-                          title: "Top-up failed",
-                          variant: "danger"
-                        });
-                      } finally {
-                        setTopupBusy(false);
-                      }
-                    }}
-                    variant="primary"
-                  >
-                    Start mobile money top-up
-                  </Button>
-                </div>
-              )
-            },
-            {
-              label: "Card",
-              value: "card",
-              content: (
-                <div className="space-y-4">
-                  <Input
-                    label="Amount"
-                    onChange={(event) => {
-                      setTopupAmount(event.target.value);
-                    }}
-                    value={topupAmount}
-                  />
-                  <Select
-                    label="Currency"
-                    onValueChange={setTopupCurrency}
-                    options={[
-                      {
-                        label: sessionData.settlement_currency,
-                        value: sessionData.settlement_currency
-                      }
-                    ]}
-                    value={topupCurrency}
-                  />
-                  <Button
-                    className="w-full"
-                    loading={topupBusy}
-                    onClick={async () => {
-                      if (!auth.accessToken) {
-                        return;
-                      }
-
-                      setTopupBusy(true);
-                      try {
-                        const created = await apiRequest<DashboardTopup>("/dashboard/v1/topups", {
-                          accessToken: auth.accessToken,
-                          body: JSON.stringify({
-                            amount: Number(topupAmount),
-                            currency: topupCurrency,
-                            method: "card"
-                          }),
-                          merchantId: sessionData.merchant_id,
-                          method: "POST"
-                        });
-
-                        setSelectedTopup(created);
-                        setTopups((current) => [created, ...current]);
-                      } catch (error) {
-                        pushToast({
-                          description:
-                            error instanceof ApiError ? error.message : "Unable to create top-up",
-                          title: "Top-up failed",
-                          variant: "danger"
-                        });
-                      } finally {
-                        setTopupBusy(false);
-                      }
-                    }}
-                    variant="primary"
-                  >
-                    Start card top-up
-                  </Button>
-                </div>
-              )
-            },
-            {
-              label: "Bank transfer",
-              value: "bank_transfer",
-              content: (
-                <div className="space-y-4">
-                  <Input
-                    label="Amount"
-                    onChange={(event) => {
-                      setTopupAmount(event.target.value);
-                    }}
-                    value={topupAmount}
-                  />
-                  <Select
-                    label="Currency"
-                    onValueChange={setTopupCurrency}
-                    options={[
-                      {
-                        label: sessionData.settlement_currency,
-                        value: sessionData.settlement_currency
-                      }
-                    ]}
-                    value={topupCurrency}
-                  />
-                  <div className="rounded-card border border-border bg-surface-subtle p-4 text-sm text-text-secondary">
-                    Send the transfer to the RichesPay settlement account and include{" "}
-                    <strong className="text-text">
-                      {topupSettings?.transfer_reference ?? "Loading..."}
-                    </strong>{" "}
-                    as the reference. We’ll confirm it from the bank statement or through an admin review.
-                  </div>
-                  <Button
-                    className="w-full"
-                    loading={topupBusy}
-                    onClick={async () => {
-                      if (!auth.accessToken) {
-                        return;
-                      }
-
-                      setTopupBusy(true);
-                      try {
-                        const created = await apiRequest<DashboardTopup>("/dashboard/v1/topups", {
-                          accessToken: auth.accessToken,
-                          body: JSON.stringify({
-                            amount: Number(topupAmount),
-                            currency: topupCurrency,
-                            method: "bank_transfer"
-                          }),
-                          merchantId: sessionData.merchant_id,
-                          method: "POST"
-                        });
-
-                        setSelectedTopup(created);
-                        setTopups((current) => [created, ...current]);
-                      } catch (error) {
-                        pushToast({
-                          description:
-                            error instanceof ApiError ? error.message : "Unable to create top-up",
-                          title: "Top-up failed",
-                          variant: "danger"
-                        });
-                      } finally {
-                        setTopupBusy(false);
-                      }
-                    }}
-                    variant="primary"
-                  >
-                    Create bank transfer top-up
-                  </Button>
-                </div>
-              )
-            }
-          ]}
-        />
-        {selectedTopup ? (
-          <div className="space-y-4 rounded-card border border-border bg-surface-subtle p-4">
-            <div>
-              <p className="text-sm text-text-secondary">Latest top-up</p>
-              <p className="mt-1 text-base font-semibold text-text">
-                {formatMoney(
-                  BigInt(selectedTopup.amount),
-                  selectedTopup.currency as "GHS" | "USD" | "ZMW",
-                  "en-US"
-                )}{" "}
-                · {selectedTopup.status}
-              </p>
-            </div>
-            {selectedTopup.method === "mobile_money" && selectedTopup.status === "pending" ? (
-              <p className="text-sm text-text-secondary">
-                Approve the prompt on the customer phone, then keep this drawer open while we poll the live status.
-              </p>
-            ) : null}
-            {selectedTopup.bank_reference ? (
-              <CopyField label="Transfer reference" value={selectedTopup.bank_reference} />
-            ) : null}
-            {selectedTopup.next_action?.type === "redirect_url" && selectedTopup.next_action.url ? (
-              <a
-                className="inline-flex rounded-input border border-border px-4 py-2 text-sm font-medium text-brand hover:bg-brand-50"
-                href={selectedTopup.next_action.url}
-                rel="noreferrer"
-                target="_blank"
-              >
-                Continue secure payment
-              </a>
-            ) : null}
-            {selectedTopup.next_action?.type === "hosted_fields" &&
-            selectedTopup.next_action.iframe_url ? (
-              <iframe
-                className="h-[420px] w-full rounded-card border border-border bg-white"
-                src={selectedTopup.next_action.iframe_url}
-                title="Card top-up"
-              />
-            ) : null}
-          </div>
-        ) : null}
-      </Drawer>
-
-      <Modal
-        description="Change this teammate’s dashboard access role."
-        onOpenChange={(open) => {
-          if (!open) {
-            setEditingMember(null);
-          }
-        }}
-        open={editingMember !== null}
-        title="Change member role"
-      >
-        <div className="space-y-4">
-          <Select
-            label="Role"
-            onValueChange={(value) => {
-              setNextRole(value as MerchantRole);
-            }}
-            options={roleOptions}
-            value={nextRole}
-          />
-          <Button
-            className="w-full"
-            onClick={async () => {
-              if (!auth.accessToken || !sessionData || !editingMember) {
-                return;
-              }
-
-              try {
-                const data = await apiRequest<{
-                  role: MerchantRole;
-                  user_id: string;
-                }>(`/dashboard/v1/team/members/${editingMember.user_id}`, {
-                  accessToken: auth.accessToken,
-                  body: JSON.stringify({ role: nextRole }),
-                  merchantId: sessionData.merchant_id,
-                  method: "PATCH"
-                });
-
-                setMembers((current) =>
-                  current.map((member) =>
-                    member.user_id === data.user_id
-                      ? { ...member, role: data.role }
-                      : member
-                  )
-                );
-                setEditingMember(null);
-              } catch (error) {
-                pushToast({
-                  description:
-                    error instanceof ApiError ? error.message : "Unable to update role",
-                  title: "Role update failed",
-                  variant: "danger"
-                });
-              }
-            }}
-            variant="primary"
-          >
-            Save role
-          </Button>
-        </div>
-      </Modal>
-    </>
-  );
-}
-
-function StatCard({
-  icon,
-  label,
-  value
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <section className="rounded-card border border-border bg-white p-5 shadow-softer">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-sm text-text-secondary">{label}</p>
-          <p className="mt-2 text-xl font-semibold text-text">{value}</p>
-        </div>
-        <div className="flex size-10 items-center justify-center rounded-full bg-brand-50 text-brand">
-          {icon}
-        </div>
-      </div>
-    </section>
-  );
+  return <MerchantWorkspace auth={auth} />;
 }
 
 const router = createBrowserRouter([
@@ -2102,11 +655,55 @@ const router = createBrowserRouter([
     element: <AcceptInvitePage />
   },
   {
+    path: "/ui-kit",
+    element: <UIKitPage />
+  },
+  {
     element: <DashboardProtectedRoute />,
     children: [
       {
         path: "/app",
-        element: <DashboardHomePage />
+        element: <Navigate replace to="/app/overview" />
+      },
+      {
+        path: "/app/overview",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/collections",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/payouts",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/payment-links",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/messages",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/sender-ids",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/contacts",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/balance",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/developers",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/settings",
+        element: <DashboardWorkspacePage />
       }
     ]
   }

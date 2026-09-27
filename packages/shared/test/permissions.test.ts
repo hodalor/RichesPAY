@@ -45,6 +45,14 @@ describe("permissions matrix", () => {
     expect(hasPermission("developer", "settlements.manage")).toBe(false);
   });
 
+  it("allows owner, admin, developer, and support roles to manage SMS workflows", () => {
+    expect(hasPermission("owner", "sms.manage")).toBe(true);
+    expect(hasPermission("admin", "sms.manage")).toBe(true);
+    expect(hasPermission("developer", "sms.manage")).toBe(true);
+    expect(hasPermission("support", "sms.manage")).toBe(true);
+    expect(hasPermission("finance", "sms.manage")).toBe(false);
+  });
+
   it("throws a forbidden error when a role lacks permission", () => {
     expect(() => requirePermission("team.manage", "viewer")).toThrow(
       /Permission denied/

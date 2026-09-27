@@ -13,6 +13,11 @@ import { ApiRouteError } from "../lib/api-error";
 import type { AuthenticatedSession } from "./session";
 
 export interface DashboardMembershipContext {
+  activeProducts: {
+    collections: boolean;
+    payouts: boolean;
+    sms: boolean;
+  };
   merchantId: string;
   merchantName: string;
   merchantStatus: string;
@@ -37,14 +42,22 @@ export async function resolveDashboardMembership(
         trx
           .selectFrom("memberships as membership")
           .innerJoin("merchants as merchant", "merchant.id", "membership.merchant_id")
+          .leftJoin("merchant_products as products", (join) =>
+            join
+              .onRef("products.merchant_id", "=", "membership.merchant_id")
+              .onRef("products.mode", "=", "membership.mode")
+          )
           .select([
+            "products.collections_enabled as collectionsEnabled",
             "membership.merchant_id as merchantId",
             "membership.mode as mode",
             "membership.role as role",
             "membership.user_id as userId",
             "merchant.legal_name as merchantName",
+            "products.payouts_enabled as payoutsEnabled",
             "merchant.settlement_currency as settlementCurrency",
             "merchant.status as merchantStatus",
+            "products.sms_enabled as smsEnabled",
             "merchant.timezone as timezone"
           ])
           .where("membership.user_id", "=", userId)
@@ -53,7 +66,21 @@ export async function resolveDashboardMembership(
     );
 
     if (membership) {
-      return membership as DashboardMembershipContext;
+      return {
+        activeProducts: {
+          collections: membership.collectionsEnabled ?? true,
+          payouts: membership.payoutsEnabled ?? true,
+          sms: membership.smsEnabled ?? true
+        },
+        merchantId: membership.merchantId,
+        merchantName: membership.merchantName,
+        merchantStatus: membership.merchantStatus,
+        mode: membership.mode,
+        role: membership.role,
+        settlementCurrency: membership.settlementCurrency,
+        timezone: membership.timezone,
+        userId: membership.userId
+      } as DashboardMembershipContext;
     }
   }
 

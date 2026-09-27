@@ -1,10 +1,12 @@
 import type { FastifyBaseLogger } from "fastify";
 
 import { startCollectionStatusPollingLoop } from "../collections";
+import { startMerchantDailyStatsLoop } from "../dashboard/stats";
 import type { AppDatabase } from "../db";
 import { startPayoutProcessingLoop } from "../payouts";
 import { startReconciliationFetchLoop } from "../reconciliation";
 import { startAutomaticSettlementLoop } from "../settlements";
+import { startSmsProcessingWorker } from "../sms/jobs";
 import { startWebhookDeliveryLoop } from "../webhooks";
 import { ProviderCallbackService } from "./callbacks";
 import { ProviderCatalog } from "./catalog";
@@ -44,10 +46,20 @@ export function startProviderBackgroundServices(input: {
     ...(input.logger ? { logger: input.logger } : {}),
     providerCatalog: catalog
   });
+  const merchantStatsLoop = startMerchantDailyStatsLoop({
+    database: input.database,
+    ...(input.logger ? { logger: input.logger } : {})
+  });
   const payoutLoop = startPayoutProcessingLoop({
     database: input.database,
     ...(input.logger ? { logger: input.logger } : {}),
     providerCatalog: catalog
+  });
+  const smsWorker = startSmsProcessingWorker({
+    database: input.database,
+    encryptionKey: input.encryptionKey,
+    ...(input.logger ? { logger: input.logger } : {}),
+    redisUrl: input.redisUrl
   });
   const webhookLoop = startWebhookDeliveryLoop({
     database: input.database,
@@ -68,9 +80,11 @@ export function startProviderBackgroundServices(input: {
     async stop() {
       collectionLoop.stop();
       healthLoop.stop();
+      merchantStatsLoop.stop();
       payoutLoop.stop();
       reconciliationLoop.stop();
       settlementLoop.stop();
+      await smsWorker.stop();
       webhookLoop.stop();
       await callbackService.close();
       await worker.close();

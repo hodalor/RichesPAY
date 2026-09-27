@@ -84,6 +84,10 @@ export const ERROR_CATALOG = {
     message: "A request with this idempotency key is still being processed.",
     status: 409
   },
+  sender_id_unavailable: {
+    message: "No approved sender ID is available for this SMS request.",
+    status: 403
+  },
   settlement_account_cool_off: {
     message: "This settlement account is still in its cool-off period.",
     status: 403

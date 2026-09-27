@@ -1,10 +1,12 @@
 import { z } from "zod";
 
+import { registerAdminPortalRoutes } from "../admin/portal-routes";
 import { adminAuthPlugin } from "../plugins/admin-auth";
 import { registerComplianceAdminRoutes } from "../compliance";
 import { registerPricingAdminRoutes } from "../pricing/admin-routes";
 import { registerProviderAdminRoutes } from "../providers/admin-routes";
 import { registerReconciliationAdminRoutes } from "../reconciliation";
+import { registerSmsAdminRoutes } from "../sms";
 import { registerTopupAdminRoutes } from "../topups";
 
 import type { FastifyTypedInstance } from "../types";
@@ -12,10 +14,12 @@ import type { FastifyTypedInstance } from "../types";
 export async function registerAdminRoutes(app: FastifyTypedInstance) {
   await app.register(async (protectedApp) => {
     await protectedApp.register(adminAuthPlugin);
+    await registerAdminPortalRoutes(protectedApp);
     await registerComplianceAdminRoutes(protectedApp);
     await registerPricingAdminRoutes(protectedApp);
     await registerProviderAdminRoutes(protectedApp);
     await registerReconciliationAdminRoutes(protectedApp);
+    await registerSmsAdminRoutes(protectedApp);
     await registerTopupAdminRoutes(protectedApp);
 
     protectedApp.get(

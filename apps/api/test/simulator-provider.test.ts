@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   SimulatorBankPayoutProvider,
   SimulatorCardAcquirer,
-  SimulatorMobileMoneyProvider
+  SimulatorMobileMoneyProvider,
+  SimulatorSmsProvider
 } from "../src/providers";
 
 describe("simulator mobile money provider", () => {
@@ -332,5 +333,95 @@ describe("simulator bank payout provider", () => {
         outcome: "succeeded"
       }
     );
+  });
+});
+
+describe("simulator sms provider", () => {
+  const provider = new SimulatorSmsProvider();
+
+  it("uses the documented SMS destination endings", async () => {
+    const delivered = await provider.send({
+      body: "Your code is 123456",
+      context: {
+        mode: "test",
+        requestId: "req_sms_0001"
+      },
+      reference: "sms_0001",
+      senderId: "RICHESPAY",
+      to: "+233241230001"
+    });
+    expect(delivered.outcome).toBe("accepted");
+    expect(delivered.rawRedacted).toMatchObject({
+      delivery_report: {
+        status: "delivered"
+      }
+    });
+
+    const undelivered = await provider.send({
+      body: "Your code is 654321",
+      context: {
+        mode: "test",
+        requestId: "req_sms_0002"
+      },
+      reference: "sms_0002",
+      senderId: "RICHESPAY",
+      to: "+233241230002"
+    });
+    expect(undelivered.outcome).toBe("accepted");
+    expect(undelivered.rawRedacted).toMatchObject({
+      delivery_report: {
+        status: "undelivered"
+      }
+    });
+
+    const rejected = await provider.send({
+      body: "Your code is 999999",
+      context: {
+        mode: "test",
+        requestId: "req_sms_0003"
+      },
+      reference: "sms_0003",
+      senderId: "RICHESPAY",
+      to: "+233241230003"
+    });
+    expect(rejected.outcome).toBe("failed");
+    expect(rejected.providerStatus).toBe("rejected");
+
+    const defaultDelivered = await provider.send({
+      body: "Hello from RichesPay",
+      context: {
+        mode: "test",
+        requestId: "req_sms_default"
+      },
+      reference: "sms_default",
+      senderId: "RICHESPAY",
+      to: "+233241230099"
+    });
+    expect(defaultDelivered.outcome).toBe("accepted");
+    expect(defaultDelivered.rawRedacted).toMatchObject({
+      delivery_report: {
+        status: "delivered"
+      }
+    });
+  });
+
+  it("parses simulator delivery reports", async () => {
+    await expect(
+      provider.parseDeliveryReport(
+        JSON.stringify({
+          event_type: "sms.delivery_report",
+          provider_ref: "sim_sms_sms_0002",
+          resource_id: "sms_0002",
+          resource_type: "sms",
+          to_status: "undelivered"
+        })
+      )
+    ).resolves.toMatchObject({
+      eventType: "sms.delivery_report",
+      providerRef: "sim_sms_sms_0002",
+      resourceId: "sms_0002",
+      resourceType: "sms",
+      toStatus: "undelivered"
+    });
   });
 });

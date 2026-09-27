@@ -273,6 +273,37 @@ export class PayoutService {
     });
   }
 
+  async quotePayoutHold(input: CreatePayoutInput): Promise<{
+    amountMinor: bigint;
+    feeMinor: bigint;
+    totalHoldMinor: bigint;
+  }> {
+    const merchant = await this.#loadMerchantContext(input.merchantId, input.mode);
+    this.#assertMerchantCanPayout(merchant);
+    this.#assertPayoutCurrency(merchant, input.currency);
+
+    return runWithMerchantScope(this.#database, input.merchantId, input.mode, async (trx) => {
+      const prepared = await this.#preparePayout(trx, merchant, {
+        accountName: input.accountName,
+        accountNumber: input.accountNumber,
+        amountMinor: input.amountMinor,
+        bankCode: input.bankCode,
+        metadata: input.metadata ?? {},
+        method: input.method,
+        narration: input.narration,
+        network: input.network,
+        phone: input.phone,
+        reference: input.reference
+      });
+
+      return {
+        amountMinor: prepared.amountMinor,
+        feeMinor: prepared.feeMinor,
+        totalHoldMinor: prepared.totalHoldMinor
+      };
+    });
+  }
+
   async createBatch(input: {
     createdBy: string;
     currency: CurrencyCode;

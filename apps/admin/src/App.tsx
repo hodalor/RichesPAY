@@ -1,6 +1,5 @@
 import * as React from "react";
 import {
-  Link,
   Navigate,
   Outlet,
   RouterProvider,
@@ -10,7 +9,7 @@ import {
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type Session } from "@supabase/supabase-js";
-import { LockKeyhole, LogOut, ShieldCheck } from "lucide-react";
+import { LockKeyhole, ShieldCheck } from "lucide-react";
 import {
   Button,
   EmptyState,
@@ -21,6 +20,7 @@ import {
 
 import { ApiError, apiRequest } from "./api-client";
 import { env } from "./env";
+import { AdminWorkspace } from "./routes/admin-workspace";
 import { supabase } from "./supabase";
 
 interface AdminSessionData {
@@ -165,10 +165,10 @@ function AdminAuthLayout({
               {env.appName}
             </div>
             <h2 className="text-4xl font-semibold tracking-tight text-text">
-              AAL2 and approved IPs only.
+              RichesPay Admin
             </h2>
             <p className="text-base text-text-secondary">
-              Every platform admin session is gated by TOTP and the admin IP allowlist before the back-office opens.
+              Staff access stays visually distinct from the merchant dashboard and every admin session is protected by TOTP plus the IP allowlist.
             </p>
           </div>
         </aside>
@@ -183,10 +183,7 @@ function ProtectedRoute() {
 
   if (auth.loading) {
     return (
-      <AdminAuthLayout
-        subtitle="Checking your admin session."
-        title="One moment"
-      >
+      <AdminAuthLayout subtitle="Checking your admin session." title="One moment">
         <div className="space-y-4">
           <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
           <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
@@ -212,7 +209,7 @@ function SignInPage() {
   return (
     <AdminAuthLayout
       subtitle="Platform admins must complete password sign-in and TOTP before the admin session is accepted."
-      title="RichesPay Admin"
+      title="Sign in"
     >
       <form
         className="space-y-4"
@@ -239,22 +236,8 @@ function SignInPage() {
           navigate("/2fa", { replace: true });
         }}
       >
-        <Input
-          label="Email"
-          onChange={(event) => {
-            setEmail(event.target.value);
-          }}
-          type="email"
-          value={email}
-        />
-        <Input
-          label="Password"
-          onChange={(event) => {
-            setPassword(event.target.value);
-          }}
-          type="password"
-          value={password}
-        />
+        <Input label="Email" onChange={(event) => setEmail(event.target.value)} type="email" value={email} />
+        <Input label="Password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
         <Button className="w-full" loading={loading} type="submit" variant="primary">
           Sign in
         </Button>
@@ -276,13 +259,7 @@ function TwoFactorPage() {
       title="Verify your admin session"
     >
       <div className="space-y-4">
-        <Input
-          label="Authentication code"
-          onChange={(event) => {
-            setCode(event.target.value);
-          }}
-          value={code}
-        />
+        <Input label="Authentication code" onChange={(event) => setCode(event.target.value)} value={code} />
         <Button
           className="w-full"
           loading={loading}
@@ -313,8 +290,7 @@ function TwoFactorPage() {
             if (challengeError || !challenge) {
               setLoading(false);
               pushToast({
-                description:
-                  challengeError?.message ?? "Unable to challenge the admin factor",
+                description: challengeError?.message ?? "Unable to challenge the admin factor",
                 title: "2FA challenge failed",
                 variant: "danger"
               });
@@ -338,7 +314,7 @@ function TwoFactorPage() {
               return;
             }
 
-            navigate("/app", { replace: true });
+            navigate("/app/overview", { replace: true });
           }}
           variant="primary"
         >
@@ -349,9 +325,9 @@ function TwoFactorPage() {
   );
 }
 
-function AdminHomePage() {
-  const { pushToast } = useToast();
+function AdminWorkspacePage() {
   const auth = useAdminAuth();
+  const { pushToast } = useToast();
   const [sessionData, setSessionData] = React.useState<AdminSessionData | null>(null);
   const [loading, setLoading] = React.useState(true);
 
@@ -385,74 +361,62 @@ function AdminHomePage() {
     })();
   }, [auth.accessToken, pushToast]);
 
-  return (
-    <AdminAuthLayout
-      subtitle="This confirms the admin-only path is protected by AAL2 and the IP allowlist."
-      title="Admin session"
-    >
-      {loading ? (
+  if (loading) {
+    return (
+      <AdminAuthLayout subtitle="Loading the RichesPay Admin workspace." title="One moment">
         <div className="space-y-4">
           <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
           <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+          <div className="h-40 animate-pulse rounded-card bg-surface-subtle" />
         </div>
-      ) : sessionData ? (
-        <div className="space-y-4">
-          <div className="rounded-card border border-border bg-surface-subtle p-4">
-            <p className="text-sm text-text-secondary">Signed in as</p>
-            <p className="mt-2 text-lg font-semibold text-text">
-              {sessionData.email ?? "Unknown email"}
-            </p>
-            <p className="mt-2 inline-flex rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand">
-              {sessionData.role}
-            </p>
-          </div>
-          <Button
-            className="w-full"
-            onClick={() => {
-              void auth.signOutEverywhere();
-            }}
-            variant="primary"
-          >
-            <LogOut className="size-4" />
-            Sign out everywhere
-          </Button>
-        </div>
-      ) : (
+      </AdminAuthLayout>
+    );
+  }
+
+  if (!sessionData || !auth.accessToken) {
+    return (
+      <AdminAuthLayout
+        subtitle="This account did not pass the admin access checks."
+        title="Admin access unavailable"
+      >
         <EmptyState
           description="This account did not pass the admin access checks."
           icon={<LockKeyhole className="size-5" />}
           title="Admin access unavailable"
         />
-      )}
-      <div className="mt-5">
-        <Link className="text-sm text-brand hover:underline" to="/sign-in">
-          Back to sign in
-        </Link>
-      </div>
-    </AdminAuthLayout>
+      </AdminAuthLayout>
+    );
+  }
+
+  return (
+    <AdminWorkspace
+      accessToken={auth.accessToken}
+      onSignOutEverywhere={auth.signOutEverywhere}
+      sessionData={sessionData}
+    />
   );
 }
 
 const router = createBrowserRouter([
-  {
-    path: "/",
-    element: <Navigate replace to="/sign-in" />
-  },
-  {
-    path: "/sign-in",
-    element: <SignInPage />
-  },
-  {
-    path: "/2fa",
-    element: <TwoFactorPage />
-  },
+  { path: "/", element: <Navigate replace to="/sign-in" /> },
+  { path: "/sign-in", element: <SignInPage /> },
+  { path: "/2fa", element: <TwoFactorPage /> },
   {
     element: <ProtectedRoute />,
     children: [
-      {
-        path: "/app",
-        element: <AdminHomePage />
-      }
+      { path: "/app", element: <Navigate replace to="/app/overview" /> },
+      { path: "/app/overview", element: <AdminWorkspacePage /> },
+      { path: "/app/merchants", element: <AdminWorkspacePage /> },
+      { path: "/app/merchants/:merchantId", element: <AdminWorkspacePage /> },
+      { path: "/app/kyb", element: <AdminWorkspacePage /> },
+      { path: "/app/compliance-flags", element: <AdminWorkspacePage /> },
+      { path: "/app/channels", element: <AdminWorkspacePage /> },
+      { path: "/app/transactions", element: <AdminWorkspacePage /> },
+      { path: "/app/reconciliation", element: <AdminWorkspacePage /> },
+      { path: "/app/sender-ids", element: <AdminWorkspacePage /> },
+      { path: "/app/pricing", element: <AdminWorkspacePage /> },
+      { path: "/app/admin-users", element: <AdminWorkspacePage /> },
+      { path: "/app/audit", element: <AdminWorkspacePage /> }
     ]
   }
 ]);

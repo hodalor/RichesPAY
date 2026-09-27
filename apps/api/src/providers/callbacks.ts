@@ -11,6 +11,7 @@ import { getClientIp } from "../auth/admin-access";
 import { ApiRouteError } from "../lib/api-error";
 import { PayoutService } from "../payouts/service";
 import { redactJsonValue } from "../lib/redaction";
+import { SmsMessagingService } from "../sms/public-service";
 import { ProviderCatalog } from "./catalog";
 import { createProviderCallbacksQueue } from "./queue";
 import type { ChannelRecord } from "./types";
@@ -22,6 +23,7 @@ export class ProviderCallbackService {
   #logger: FastifyBaseLogger | undefined;
   #payoutService: PayoutService;
   #queue: ReturnType<typeof createProviderCallbacksQueue> | undefined;
+  #smsService: SmsMessagingService;
 
   constructor(input: {
     catalog: ProviderCatalog;
@@ -38,13 +40,16 @@ export class ProviderCallbackService {
     this.#payoutService = new PayoutService({
       database: input.database
     });
+    this.#smsService = new SmsMessagingService({
+      database: input.database
+    });
     this.#queue = input.redisUrl
       ? createProviderCallbacksQueue(input.redisUrl)
       : undefined;
   }
 
   async close() {
-    await this.#queue?.close();
+    await Promise.allSettled([this.#queue?.close(), this.#smsService.close()]);
   }
 
   async handleInboundCallback(input: {
@@ -197,6 +202,15 @@ export class ProviderCallbackService {
             ...(parsed.providerRef ? { providerRef: parsed.providerRef } : {}),
             providerStatus: parsed.toStatus,
             ...(parsed.reason ? { reason: parsed.reason } : {})
+          });
+        } else if (parsed.resourceType === "sms" && parsed.toStatus) {
+          await this.#smsService.applyDeliveryReport({
+            ...(parsed.merchantId ? { merchantId: parsed.merchantId } : {}),
+            ...(parsed.mode ? { mode: parsed.mode } : {}),
+            ...(parsed.providerRef ? { providerRef: parsed.providerRef } : {}),
+            rawPayload: parsed.rawRedacted,
+            ...(parsed.resourceId ? { resourceId: parsed.resourceId } : {}),
+            toStatus: parsed.toStatus
           });
         } else if (
           parsed.merchantId &&

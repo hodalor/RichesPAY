@@ -223,10 +223,6 @@ describe("settlements and reconciliation", () => {
       collectionId: matchingCollection.id,
       providerStatus: "successful"
     });
-    await collectionService.applyProviderCallback({
-      collectionId: statusMismatchCollection.id,
-      providerStatus: "successful"
-    });
 
     const amountMismatchPayout = await payoutService.create({
       accountName: null,
@@ -265,22 +261,42 @@ describe("settlements and reconciliation", () => {
       requestId: "req_pay_missing_provider"
     });
 
+    const queuedToProcessingAmountMismatchPayout = await payoutService.reconcileProviderConfirmation({
+      merchantId: "mer_reconciliation_ops",
+      mode: "test",
+      now: new Date("2026-09-27T06:55:00.000Z"),
+      outcome: "accepted",
+      payoutId: amountMismatchPayout.id,
+      providerRef: `prov_${amountMismatchPayout.id}`,
+      providerStatus: "processing"
+    });
     const successfulAmountMismatchPayout = await payoutService.reconcileProviderConfirmation({
       merchantId: "mer_reconciliation_ops",
       mode: "test",
       now: new Date("2026-09-27T07:00:00.000Z"),
       outcome: "succeeded",
-      payoutId: amountMismatchPayout.id,
-      providerRef: amountMismatchPayout.providerRef ?? `prov_${amountMismatchPayout.id}`,
+      payoutId: queuedToProcessingAmountMismatchPayout.id,
+      providerRef:
+        queuedToProcessingAmountMismatchPayout.providerRef ?? `prov_${amountMismatchPayout.id}`,
       providerStatus: "successful"
+    });
+    const processingMissingAtProviderPayout = await payoutService.reconcileProviderConfirmation({
+      merchantId: "mer_reconciliation_ops",
+      mode: "test",
+      now: new Date("2026-09-27T07:03:00.000Z"),
+      outcome: "accepted",
+      payoutId: missingAtProviderPayout.id,
+      providerRef: `prov_${missingAtProviderPayout.id}`,
+      providerStatus: "processing"
     });
     const successfulMissingAtProviderPayout = await payoutService.reconcileProviderConfirmation({
       merchantId: "mer_reconciliation_ops",
       mode: "test",
       now: new Date("2026-09-27T07:05:00.000Z"),
       outcome: "succeeded",
-      payoutId: missingAtProviderPayout.id,
-      providerRef: missingAtProviderPayout.providerRef ?? `prov_${missingAtProviderPayout.id}`,
+      payoutId: processingMissingAtProviderPayout.id,
+      providerRef:
+        processingMissingAtProviderPayout.providerRef ?? `prov_${missingAtProviderPayout.id}`,
       providerStatus: "successful"
     });
 
@@ -413,7 +429,7 @@ describe("settlements and reconciliation", () => {
 
   async function fundMerchant(merchantId: string) {
     const pendingTopup = await topupService.createBankTransferTopup({
-      amountMinor: 5000n,
+      amountMinor: 20000n,
       currency: "GHS",
       merchantId,
       mode: "test"

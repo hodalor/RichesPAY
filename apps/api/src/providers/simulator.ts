@@ -466,10 +466,40 @@ export class SimulatorSmsProvider implements SmsProvider {
   }
 
   async send(msg: SmsMessageRequest): Promise<ProviderResult> {
-    return successResult(`sim_sms_${msg.reference}`, "accepted", {
-      reference: msg.reference,
-      to: msg.to
-    });
+    const scenario = getSimulatorSmsScenario(msg.to);
+
+    if (scenario === "rejected") {
+      return {
+        failureCode: "provider_error",
+        outcome: "failed",
+        providerRef: `sim_sms_${msg.reference}`,
+        providerStatus: "rejected",
+        rawRedacted: {
+          reference: msg.reference,
+          scenario,
+          sender_id: msg.senderId,
+          to: msg.to
+        }
+      };
+    }
+
+    return {
+      outcome: "accepted",
+      providerRef: `sim_sms_${msg.reference}`,
+      providerStatus: "accepted",
+      rawRedacted: {
+        delivery_report: {
+          event_type: "sms.delivery_report",
+          provider_ref: `sim_sms_${msg.reference}`,
+          resource_id: msg.reference,
+          status: scenario
+        },
+        reference: msg.reference,
+        scenario,
+        sender_id: msg.senderId,
+        to: msg.to
+      }
+    };
   }
 }
 
@@ -593,4 +623,18 @@ function getSimulatorBankScenario(accountNumber: string): SimulatorScenario {
   }
 
   return "callback_success_3s";
+}
+
+function getSimulatorSmsScenario(phoneNumber: string): "delivered" | "rejected" | "undelivered" {
+  const digits = phoneNumber.replace(/[^\d]/g, "");
+
+  if (digits.endsWith("0002")) {
+    return "undelivered";
+  }
+
+  if (digits.endsWith("0003")) {
+    return "rejected";
+  }
+
+  return "delivered";
 }
