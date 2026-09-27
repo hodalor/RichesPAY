@@ -48,6 +48,7 @@ import { formatMoney } from "@richespay/shared";
 
 import { ApiError, apiRequest } from "../api-client";
 import { env } from "../env";
+import { supabase } from "../supabase";
 
 type MerchantMode = "live" | "test";
 
@@ -1629,21 +1630,62 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
     }
   }
 
-  if (membershipsQuery.isLoading || sessionQuery.isLoading) {
+  const sessionError = sessionQuery.error;
+  const mfaRequired = sessionError instanceof ApiError && sessionError.code === "mfa_required";
+
+  React.useEffect(() => {
+    if (!mfaRequired) {
+      return;
+    }
+
+    void supabase.auth.mfa.listFactors().then(({ data }) => {
+      const verified = data?.totp.some((factor) => factor.status === "verified");
+      window.location.assign(verified ? "/enter-2fa" : "/setup-2fa");
+    });
+  }, [mfaRequired]);
+
+  if (membershipsQuery.isLoading || sessionQuery.isLoading || mfaRequired) {
     return (
       <div className="p-8">
-        <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+        <EmptyState
+          description={mfaRequired ? "Merchant owners need an authenticator code before the workspace opens." : "Checking your merchant access."}
+          title={mfaRequired ? "Set up two-factor authentication" : "One moment"}
+        />
       </div>
     );
   }
 
-  if (!membershipsQuery.data?.length || !session) {
+  if (!membershipsQuery.data?.length) {
     return (
       <div className="p-8">
         <EmptyState
-          action={<Link to="/accept-invite"><Button variant="primary">Accept invite</Button></Link>}
-          description="Sign in to a merchant account or accept an invite to continue."
+          action={
+            <div className="flex flex-wrap justify-center gap-3">
+              <Link to="/sign-up">
+                <Button variant="primary">Create merchant</Button>
+              </Link>
+              <Link to="/accept-invite">
+                <Button variant="secondary">Accept invite</Button>
+              </Link>
+            </div>
+          }
+          description="This login is not a member of a merchant. Sign in with the account that created the business, create a merchant, or open an invitation link."
           title="No merchant access yet"
+        />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="p-8">
+        <EmptyState
+          description={
+            sessionError instanceof ApiError
+              ? sessionError.message
+              : "The merchant session could not be loaded."
+          }
+          title="Merchant session unavailable"
         />
       </div>
     );

@@ -252,7 +252,12 @@ function SignUpPage() {
           setSubmitting(true);
 
           try {
-            await apiRequest("/dashboard/v1/auth/sign-up", {
+            const result = await apiRequest<{
+              merchant_id: string;
+              settlement_currency: string;
+              user_id: string;
+              verification_required: boolean;
+            }>("/dashboard/v1/auth/sign-up", {
               body: JSON.stringify({
                 business_name: businessName,
                 country_code: countryCode,
@@ -264,7 +269,18 @@ function SignUpPage() {
             });
 
             window.localStorage.setItem(signUpEmailStorageKey, email);
-            navigate("/verify-email");
+
+            if (result.verification_required) {
+              navigate("/verify-email");
+              return;
+            }
+
+            pushToast({
+              title: "Account created",
+              description: "Your merchant owner account is ready. Sign in to continue.",
+              variant: "success"
+            });
+            navigate("/sign-in");
           } catch (error) {
             pushToast({
               title: "Sign-up failed",
@@ -316,6 +332,7 @@ function VerifyEmailPage() {
 }
 
 function SetupTwoFactorPage() {
+  const navigate = useNavigate();
   const { pushToast } = useToast();
   const [factorId, setFactorId] = React.useState("");
   const [qrCode, setQrCode] = React.useState<string | null>(null);
@@ -384,6 +401,7 @@ function SetupTwoFactorPage() {
       description: "Your TOTP factor is ready to use.",
       variant: "success"
     });
+    navigate("/app/overview", { replace: true });
   }
 
   return (
@@ -580,14 +598,24 @@ function AcceptInvitePage() {
           <Link to="/sign-in">
             <Button variant="primary">Sign in to accept</Button>
           </Link>
+        ) : !token ? (
+          <div className="space-y-4">
+            <p className="text-sm text-text-secondary">
+              This page needs the invitation link from your email. Opening Accept invite from the dashboard does not include one.
+            </p>
+            <Button className="w-full" onClick={() => navigate("/app/overview")} variant="primary">
+              Back to dashboard
+            </Button>
+            <Link to="/sign-up">
+              <Button className="w-full" variant="secondary">
+                Create a merchant
+              </Button>
+            </Link>
+          </div>
         ) : (
           <Button
             loading={loading}
             onClick={async () => {
-              if (!token) {
-                return;
-              }
-
               setLoading(true);
               try {
                 await apiRequest("/dashboard/v1/auth/accept-invite", {

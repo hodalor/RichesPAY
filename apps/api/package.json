@@ -7,6 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsup src/server.ts --format esm --out-dir dist",
     "db:typegen": "tsx src/db/scripts/generate-types.ts",
+    "seed:reference": "node scripts/seed-reference-data.mjs",
+    "seed:super-admin": "node scripts/seed-super-admin.mjs",
     "lint": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"

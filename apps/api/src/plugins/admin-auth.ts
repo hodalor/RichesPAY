@@ -16,7 +16,11 @@ export const adminAuthPlugin = fp(async (app) => {
   app.addHook("onRequest", async (request) => {
     const session = await authenticateSupabaseSession(
       app.db,
-      app.appEnv.SUPABASE_JWT_SECRET,
+      {
+        anonKey: app.appEnv.SUPABASE_ANON_KEY,
+        jwtSecret: app.appEnv.SUPABASE_JWT_SECRET,
+        supabaseUrl: app.appEnv.SUPABASE_URL
+      },
       request.headers.authorization
     );
     const platformAdmin = await resolvePlatformAdmin(app.db, session.userId);

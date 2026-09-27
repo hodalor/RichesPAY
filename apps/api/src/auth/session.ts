@@ -1,5 +1,5 @@
 import { runWithSystemScope, type AppDatabase } from "../db";
-import { verifySupabaseJwt, type SupabaseJwtClaims } from "./jwt";
+import { verifySupabaseJwt, type SupabaseJwtClaims, type SupabaseJwtConfig } from "./jwt";
 
 export interface AuthenticatedSession {
   aal: "aal1" | "aal2";
@@ -10,10 +10,10 @@ export interface AuthenticatedSession {
 
 export async function authenticateSupabaseSession(
   database: AppDatabase,
-  jwtSecret: string,
+  jwtConfig: string | SupabaseJwtConfig,
   authorizationHeader: string | undefined
 ): Promise<AuthenticatedSession> {
-  const claims = await verifySupabaseJwt(authorizationHeader, jwtSecret);
+  const claims = await verifySupabaseJwt(authorizationHeader, jwtConfig);
   const email =
     claims.email ??
     (await loadUserEmail(database, claims.sub));

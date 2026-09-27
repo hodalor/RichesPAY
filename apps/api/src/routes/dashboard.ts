@@ -21,7 +21,7 @@ import { registerSmsDashboardRoutes } from "../sms";
 import { registerSettlementDashboardRoutes } from "../settlements";
 import { registerTopupDashboardRoutes } from "../topups";
 import { registerWebhookDashboardRoutes } from "../webhooks";
-import { createSupabaseAnonClient } from "../auth/supabase-client";
+import { createSupabaseServiceClient } from "../auth/supabase-client";
 import { runWithSystemScope, type ScopedTransaction } from "../db";
 import { dashboardAuthPlugin } from "../plugins/dashboard-auth";
 import { ApiRouteError } from "../lib/api-error";
@@ -91,7 +91,11 @@ async function requireSession(
 ) {
   return authenticateSupabaseSession(
     app.db,
-    app.appEnv.SUPABASE_JWT_SECRET,
+    {
+      anonKey: app.appEnv.SUPABASE_ANON_KEY,
+      jwtSecret: app.appEnv.SUPABASE_JWT_SECRET,
+      supabaseUrl: app.appEnv.SUPABASE_URL
+    },
     authorizationHeader
   );
 }
@@ -132,7 +136,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               merchant_id: z.string(),
               settlement_currency: z.enum(["GHS", "ZMW", "USD"]),
               user_id: z.string(),
-              verification_required: z.literal(true)
+              verification_required: z.boolean()
             })
           })
         }
@@ -140,16 +144,17 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
     },
     async (request, reply) => {
       const body = signUpBodySchema.parse(request.body);
-      const supabase = createSupabaseAnonClient(app.appEnv);
+      // Server-side Admin API avoids anon signup email rate limits and keeps
+      // merchant provisioning tied to Auth user creation.
+      const supabase = createSupabaseServiceClient(app.appEnv);
+      const autoConfirmEmail = app.appEnv.APP_ENV !== "production";
 
-      const { data, error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.admin.createUser({
         email: body.email,
+        email_confirm: autoConfirmEmail,
         password: body.password,
-        options: {
-          data: {
-            full_name: body.full_name
-          },
-          emailRedirectTo: `${app.appEnv.DASHBOARD_ORIGIN}/verify-email`
+        user_metadata: {
+          full_name: body.full_name
         }
       });
 
@@ -163,6 +168,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
       }
 
       const userId = data.user.id;
+      const verificationRequired = !autoConfirmEmail;
 
       const merchant = await runWithSystemScope(
         app.db,
@@ -183,15 +189,6 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               statusCode: 400
             });
           }
-
-          await trx
-            .insertInto("auth.users")
-            .values({
-              email: body.email,
-              id: userId
-            })
-            .onConflict((conflict) => conflict.column("id").doNothing())
-            .execute();
 
           await trx
             .insertInto("profiles")
@@ -251,7 +248,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
           merchant_id: merchant.id,
           settlement_currency: merchant.settlement_currency as "GHS" | "USD" | "ZMW",
           user_id: userId,
-          verification_required: true
+          verification_required: verificationRequired
         }
       });
     }

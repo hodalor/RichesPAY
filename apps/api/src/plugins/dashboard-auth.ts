@@ -54,7 +54,11 @@ export const dashboardAuthPlugin = fp(async (app) => {
 
     const session = await authenticateSupabaseSession(
       app.db,
-      app.appEnv.SUPABASE_JWT_SECRET,
+      {
+        anonKey: app.appEnv.SUPABASE_ANON_KEY,
+        jwtSecret: app.appEnv.SUPABASE_JWT_SECRET,
+        supabaseUrl: app.appEnv.SUPABASE_URL
+      },
       request.headers.authorization
     );
     const membership = await resolveDashboardMembership(

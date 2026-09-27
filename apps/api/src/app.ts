@@ -52,6 +52,84 @@ function getValidationField(error: unknown): string | undefined {
   return path || firstIssue?.params?.missingProperty;
 }
 
+/** Browsers treat localhost and 127.0.0.1 as different origins. */
+function corsOrigins(configured: string[]): string[] {
+  const origins = new Set<string>();
+
+  for (const value of configured) {
+    origins.add(value);
+
+    try {
+      const url = new URL(value);
+      if (url.hostname === "127.0.0.1") {
+        url.hostname = "localhost";
+        origins.add(url.origin);
+      } else if (url.hostname === "localhost") {
+        url.hostname = "127.0.0.1";
+        origins.add(url.origin);
+      }
+    } catch {
+      // Keep the configured value when it is not a parseable URL.
+    }
+  }
+
+  return [...origins];
+}
+
+function isPrivateDevHostname(hostname: string): boolean {
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") {
+    return true;
+  }
+
+  const parts = hostname.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return false;
+  }
+
+  return (
+    parts[0] === 10 ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 172 && (parts[1] ?? 0) >= 16 && (parts[1] ?? 0) <= 31)
+  );
+}
+
+function isAllowedCorsOrigin(
+  origin: string | undefined,
+  configured: string[],
+  appEnv: AppEnv["APP_ENV"]
+): boolean {
+  if (!origin) {
+    return true;
+  }
+
+  if (corsOrigins(configured).includes(origin)) {
+    return true;
+  }
+
+  if (appEnv !== "development") {
+    return false;
+  }
+
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  const allowedPorts = new Set(
+    configured.flatMap((value) => {
+      try {
+        return [new URL(value).port];
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  return allowedPorts.has(requestUrl.port) && isPrivateDevHostname(requestUrl.hostname);
+}
+
 export async function buildApp(env: AppEnv) {
   const redis = new IORedis(env.REDIS_URL, {
     enableReadyCheck: false,
@@ -270,8 +348,15 @@ export async function buildApp(env: AppEnv) {
       preload: true
     }
   });
+  const allowedAppOrigins = [
+    env.DASHBOARD_ORIGIN,
+    env.ADMIN_ORIGIN,
+    env.CHECKOUT_ORIGIN
+  ];
   await app.register(cors, {
-    origin: [env.DASHBOARD_ORIGIN, env.ADMIN_ORIGIN, env.CHECKOUT_ORIGIN]
+    origin: (origin, callback) => {
+      callback(null, isAllowedCorsOrigin(origin, allowedAppOrigins, env.APP_ENV));
+    }
   });
   await app.register(rateLimit, {
     max: 100,

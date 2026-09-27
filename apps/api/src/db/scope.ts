@@ -12,6 +12,7 @@ interface SystemScopeOptions {
 }
 
 let defaultDatabase: AppDatabase | null = null;
+let roleSwitchingEnabled: boolean | null = null;
 
 function getDefaultDatabase(): AppDatabase {
   if (!defaultDatabase) {
@@ -23,6 +24,44 @@ function getDefaultDatabase(): AppDatabase {
 
 export function registerDatabase(database: AppDatabase) {
   defaultDatabase = database;
+  roleSwitchingEnabled = null;
+}
+
+/**
+ * Hosted Supabase often blocks SET ROLE for the non-superuser `postgres`
+ * pooler role. Local/dev Postgres (and tests) still support it. Detect once
+ * and skip role switching when unavailable; table-owner / bypassrls access
+ * remains sufficient for the API login role.
+ */
+export async function ensureRoleSwitchingDetected(
+  database: AppDatabase = getDefaultDatabase()
+): Promise<boolean> {
+  if (roleSwitchingEnabled !== null) {
+    return roleSwitchingEnabled;
+  }
+
+  try {
+    await database.transaction().execute(async (trx) => {
+      await sql.raw("set local role richespay_system").execute(trx);
+    });
+    roleSwitchingEnabled = true;
+  } catch {
+    roleSwitchingEnabled = false;
+  }
+
+  return roleSwitchingEnabled;
+}
+
+async function applyLocalRole(
+  trx: ScopedTransaction,
+  role: "richespay_app" | "richespay_system"
+) {
+  const enabled = await ensureRoleSwitchingDetected();
+  if (!enabled) {
+    return;
+  }
+
+  await sql.raw(`set local role ${role}`).execute(trx);
 }
 
 export async function runWithMerchantScope<T>(
@@ -32,7 +71,7 @@ export async function runWithMerchantScope<T>(
   fn: (trx: ScopedTransaction) => Promise<T>
 ): Promise<T> {
   return database.transaction().execute(async (trx) => {
-    await sql.raw("set local role richespay_app").execute(trx);
+    await applyLocalRole(trx, "richespay_app");
     await sql`select set_config('app.merchant_id', ${merchantId}, true)`.execute(trx);
     await sql`select set_config('app.mode', ${mode}, true)`.execute(trx);
 
@@ -75,7 +114,7 @@ export async function runWithSystemScope<T>(
   options: SystemScopeOptions = {}
 ): Promise<T> {
   return database.transaction().execute(async (trx) => {
-    await sql.raw("set local role richespay_system").execute(trx);
+    await applyLocalRole(trx, "richespay_system");
 
     const result = await fn(trx);
 

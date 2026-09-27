@@ -1,4 +1,4 @@
-import { jwtVerify, type JWTPayload } from "jose";
+import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from "jose";
 
 import { ApiRouteError } from "../lib/api-error";
 
@@ -9,6 +9,14 @@ export interface SupabaseJwtClaims extends JWTPayload {
   session_id?: string;
   sub: string;
 }
+
+export interface SupabaseJwtConfig {
+  anonKey?: string;
+  jwtSecret: string;
+  supabaseUrl?: string;
+}
+
+const jwksByUrl = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 function getBearerToken(headerValue: string | undefined): string {
   if (!headerValue) {
@@ -31,17 +39,41 @@ function getBearerToken(headerValue: string | undefined): string {
   return token;
 }
 
+function remoteJwks(supabaseUrl: string, anonKey: string | undefined) {
+  const cached = jwksByUrl.get(supabaseUrl);
+  if (cached) {
+    return cached;
+  }
+
+  const jwks = createRemoteJWKSet(new URL(`${supabaseUrl}/auth/v1/.well-known/jwks.json`), {
+    ...(anonKey
+      ? {
+          headers: {
+            apikey: anonKey
+          }
+        }
+      : {})
+  });
+  jwksByUrl.set(supabaseUrl, jwks);
+  return jwks;
+}
+
 export async function verifySupabaseJwt(
   authorizationHeader: string | undefined,
-  jwtSecret: string
+  config: string | SupabaseJwtConfig
 ): Promise<SupabaseJwtClaims> {
   const token = getBearerToken(authorizationHeader);
+  const jwtConfig: SupabaseJwtConfig =
+    typeof config === "string" ? { jwtSecret: config } : config;
 
   try {
-    const { payload } = await jwtVerify(
-      token,
-      new TextEncoder().encode(jwtSecret)
-    );
+    const header = decodeProtectedHeader(token);
+    const key =
+      header.alg === "HS256" || !jwtConfig.supabaseUrl
+        ? new TextEncoder().encode(jwtConfig.jwtSecret)
+        : remoteJwks(jwtConfig.supabaseUrl, jwtConfig.anonKey);
+
+    const { payload } = await jwtVerify(token, key);
 
     if (!payload.sub) {
       throw new ApiRouteError({

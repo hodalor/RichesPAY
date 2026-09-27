@@ -251,7 +251,179 @@ function TwoFactorPage() {
   const auth = useAdminAuth();
   const navigate = useNavigate();
   const [code, setCode] = React.useState("");
+  const [factorId, setFactorId] = React.useState("");
+  const [qrCode, setQrCode] = React.useState<string | null>(null);
+  const [secret, setSecret] = React.useState("");
+  const [mode, setMode] = React.useState<"loading" | "enroll" | "verify">("loading");
   const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!auth.session) {
+      if (!auth.loading) {
+        navigate("/sign-in", { replace: true });
+      }
+      return;
+    }
+
+    let mounted = true;
+
+    void (async () => {
+      const { data, error } = await supabase.auth.mfa.listFactors();
+
+      if (!mounted) {
+        return;
+      }
+
+      if (error) {
+        pushToast({
+          description: error.message,
+          title: "Unable to load 2FA factors",
+          variant: "danger"
+        });
+        setMode("enroll");
+        return;
+      }
+
+      const verifiedFactor = data?.totp.find((factor) => factor.status === "verified");
+      setMode(verifiedFactor ? "verify" : "enroll");
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [auth.loading, auth.session, navigate, pushToast]);
+
+  async function enrollTotp() {
+    setLoading(true);
+    const { data, error } = await supabase.auth.mfa.enroll({
+      factorType: "totp",
+      friendlyName: "RichesPay admin"
+    });
+    setLoading(false);
+
+    if (error || !data) {
+      pushToast({
+        description: error?.message ?? "Unable to start TOTP setup.",
+        title: "2FA setup failed",
+        variant: "danger"
+      });
+      return;
+    }
+
+    setFactorId(data.id);
+    setQrCode(data.totp.qr_code);
+    setSecret(data.totp.secret);
+  }
+
+  async function verifyTotp() {
+    if (!auth.session) {
+      navigate("/sign-in", { replace: true });
+      return;
+    }
+
+    setLoading(true);
+
+    let activeFactorId = factorId;
+
+    if (!activeFactorId) {
+      const { data, error: listError } = await supabase.auth.mfa.listFactors();
+      const factor =
+        data?.totp.find((entry) => entry.status === "verified") ?? data?.totp[0];
+
+      if (listError || !factor) {
+        setLoading(false);
+        pushToast({
+          description: "Set up authenticator 2FA before verifying a code.",
+          title: "2FA is missing",
+          variant: "danger"
+        });
+        setMode("enroll");
+        return;
+      }
+
+      activeFactorId = factor.id;
+    }
+
+    const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({
+      factorId: activeFactorId
+    });
+
+    if (challengeError || !challenge) {
+      setLoading(false);
+      pushToast({
+        description: challengeError?.message ?? "Unable to challenge the admin factor",
+        title: "2FA challenge failed",
+        variant: "danger"
+      });
+      return;
+    }
+
+    const { error } = await supabase.auth.mfa.verify({
+      challengeId: challenge.id,
+      code,
+      factorId: activeFactorId
+    });
+
+    setLoading(false);
+
+    if (error) {
+      pushToast({
+        description: error.message,
+        title: "Verification failed",
+        variant: "danger"
+      });
+      return;
+    }
+
+    navigate("/app/overview", { replace: true });
+  }
+
+  if (mode === "loading" || auth.loading) {
+    return (
+      <AdminAuthLayout subtitle="Checking your admin 2FA requirements." title="One moment">
+        <div className="space-y-4">
+          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+        </div>
+      </AdminAuthLayout>
+    );
+  }
+
+  if (mode === "enroll") {
+    return (
+      <AdminAuthLayout
+        subtitle="Platform admins must enroll a TOTP authenticator before the admin session is accepted."
+        title="Set up admin 2FA"
+      >
+        <div className="space-y-4">
+          {!factorId ? (
+            <Button className="w-full" loading={loading} onClick={() => void enrollTotp()} variant="primary">
+              Generate QR code
+            </Button>
+          ) : (
+            <>
+              {qrCode ? (
+                <img
+                  alt="RichesPay admin TOTP QR code"
+                  className="mx-auto h-48 w-48 rounded-card border border-border bg-white p-3"
+                  src={qrCode}
+                />
+              ) : null}
+              <Input label="Secret" readOnly value={secret} />
+              <Input
+                label="Authenticator code"
+                onChange={(event) => setCode(event.target.value)}
+                value={code}
+              />
+              <Button className="w-full" loading={loading} onClick={() => void verifyTotp()} variant="primary">
+                Verify and continue
+              </Button>
+            </>
+          )}
+        </div>
+      </AdminAuthLayout>
+    );
+  }
 
   return (
     <AdminAuthLayout
@@ -260,64 +432,7 @@ function TwoFactorPage() {
     >
       <div className="space-y-4">
         <Input label="Authentication code" onChange={(event) => setCode(event.target.value)} value={code} />
-        <Button
-          className="w-full"
-          loading={loading}
-          onClick={async () => {
-            if (!auth.session) {
-              navigate("/sign-in", { replace: true });
-              return;
-            }
-
-            setLoading(true);
-
-            const { data, error: listError } = await supabase.auth.mfa.listFactors();
-            const factor = data?.totp[0];
-
-            if (listError || !factor) {
-              setLoading(false);
-              pushToast({
-                description: "This admin user does not have a TOTP factor enrolled yet.",
-                title: "2FA is missing",
-                variant: "danger"
-              });
-              return;
-            }
-
-            const { data: challenge, error: challengeError } =
-              await supabase.auth.mfa.challenge({ factorId: factor.id });
-
-            if (challengeError || !challenge) {
-              setLoading(false);
-              pushToast({
-                description: challengeError?.message ?? "Unable to challenge the admin factor",
-                title: "2FA challenge failed",
-                variant: "danger"
-              });
-              return;
-            }
-
-            const { error } = await supabase.auth.mfa.verify({
-              challengeId: challenge.id,
-              code,
-              factorId: factor.id
-            });
-
-            setLoading(false);
-
-            if (error) {
-              pushToast({
-                description: error.message,
-                title: "Verification failed",
-                variant: "danger"
-              });
-              return;
-            }
-
-            navigate("/app/overview", { replace: true });
-          }}
-          variant="primary"
-        >
+        <Button className="w-full" loading={loading} onClick={() => void verifyTotp()} variant="primary">
           Verify code
         </Button>
       </div>

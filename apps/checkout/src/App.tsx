@@ -1249,7 +1249,13 @@ function getErrorMessage(error: unknown) {
 }
 
 function createIdempotencyKey() {
-  return `cko_${crypto.randomUUID()}`;
+  if (typeof crypto.randomUUID === "function") {
+    return `cko_${crypto.randomUUID()}`;
+  }
+
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `cko_${hex}`;
 }
 
 function formatCountdown(totalSeconds: number) {
