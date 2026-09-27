@@ -29,6 +29,8 @@ interface ProviderMoneyParams extends MerchantMoneyParams {
 interface CollectionCreditParams extends ProviderMoneyParams {
   collectionId: string;
   description?: string;
+  destinationAccountType?: "merchant_available" | "merchant_reserve";
+  feeAmount?: bigint;
 }
 
 interface PayoutHoldParams extends MerchantMoneyParams {
@@ -115,6 +117,17 @@ export class LedgerService {
   async creditCollection(
     params: CollectionCreditParams
   ): Promise<LedgerJournalEntry> {
+    const feeAmount = params.feeAmount ?? 0n;
+    if (feeAmount < 0n) {
+      throw new Error("Collection fee cannot be negative");
+    }
+
+    if (feeAmount > params.amount) {
+      throw new Error("Collection fee cannot exceed the collected amount");
+    }
+
+    const destinationAmount = params.amount - feeAmount;
+
     return this.createJournal({
       currency: params.currency,
       description:
@@ -130,14 +143,26 @@ export class LedgerService {
           amount: params.amount,
           direction: "debit"
         },
-        {
-          account: {
-            merchantId: params.merchantId,
-            type: "merchant_available"
-          },
-          amount: params.amount,
-          direction: "credit"
-        }
+        ...(destinationAmount > 0n
+          ? [{
+              account: {
+                merchantId: params.merchantId,
+                type: params.destinationAccountType ?? "merchant_available"
+              },
+              amount: destinationAmount,
+              direction: "credit" as const
+            }]
+          : []),
+        ...(feeAmount > 0n
+          ? [{
+              account: {
+                merchantId: null,
+                type: "platform_fees" as const
+              },
+              amount: feeAmount,
+              direction: "credit" as const
+            }]
+          : [])
       ],
       referenceId: params.collectionId,
       referenceType: "collection"

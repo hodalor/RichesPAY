@@ -27,6 +27,8 @@ export type ChannelKind = "card" | "mobile_money" | "sms";
 
 export type ChannelStatus = "active" | "disabled" | "maintenance";
 
+export type CollectionStatus = "expired" | "failed" | "pending" | "processing" | "reversed" | "successful";
+
 export type FeeBearer = "customer" | "merchant";
 
 export type FeeMethod = "bank" | "card" | "mobile_money";
@@ -172,6 +174,39 @@ export interface Channels {
   updated_at: Generated<Timestamp>;
 }
 
+export interface Collections {
+  amount: Int8;
+  channel_id: string | null;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  customer_email: string | null;
+  customer_name: string | null;
+  description: string | null;
+  expires_at: Timestamp | null;
+  failure_code: string | null;
+  failure_message: string | null;
+  fee_bearer: FeeBearer;
+  fee_minor: Generated<Int8>;
+  fx_rate_id: string | null;
+  id: string;
+  last_status_check_at: Timestamp | null;
+  merchant_id: string;
+  metadata: Generated<Json>;
+  method: FeeMethod;
+  mode: RpMode;
+  net_minor: Int8;
+  network: string | null;
+  next_status_check_at: Timestamp | null;
+  phone: string;
+  presentment_amount: Int8 | null;
+  presentment_currency: string | null;
+  provider_ref: string | null;
+  reference: string | null;
+  status: CollectionStatus;
+  status_check_attempts: Generated<number>;
+}
+
 export interface Countries {
   code: string;
   currency: string;
@@ -179,6 +214,15 @@ export interface Countries {
   enabled: Generated<boolean>;
   name: string;
   timezone: string;
+}
+
+export interface EventsOutbox {
+  created_at: Generated<Timestamp>;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  payload: Json;
+  type: string;
 }
 
 export interface FeePlans {
@@ -442,7 +486,9 @@ export interface DB {
   "auth.users": AuthUsers;
   channel_health_events: ChannelHealthEvents;
   channels: Channels;
+  collections: Collections;
   countries: Countries;
+  events_outbox: EventsOutbox;
   fee_plans: FeePlans;
   fx_rates: FxRates;
   idempotency_keys: IdempotencyKeys;

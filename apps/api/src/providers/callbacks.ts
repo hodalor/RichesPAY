@@ -4,6 +4,7 @@ import { newId } from "@richespay/shared";
 import type { FastifyBaseLogger } from "fastify";
 import ipaddr from "ipaddr.js";
 
+import { CollectionService } from "../collections";
 import { runWithSystemScope } from "../db";
 import type { AppDatabase } from "../db";
 import { getClientIp } from "../auth/admin-access";
@@ -15,6 +16,7 @@ import type { ChannelRecord } from "./types";
 
 export class ProviderCallbackService {
   #catalog: ProviderCatalog;
+  #collectionService: CollectionService;
   #database: AppDatabase;
   #logger: FastifyBaseLogger | undefined;
   #queue: ReturnType<typeof createProviderCallbacksQueue> | undefined;
@@ -26,6 +28,9 @@ export class ProviderCallbackService {
     redisUrl?: string;
   }) {
     this.#catalog = input.catalog;
+    this.#collectionService = new CollectionService({
+      database: input.database
+    });
     this.#database = input.database;
     this.#logger = input.logger;
     this.#queue = input.redisUrl
@@ -166,6 +171,17 @@ export class ProviderCallbackService {
         const parsed = await this.#parseCallback(channel, callback.rawBody);
 
         if (
+          parsed.resourceType === "collection" &&
+          parsed.resourceId &&
+          parsed.toStatus
+        ) {
+          await this.#collectionService.applyProviderCallback({
+            collectionId: parsed.resourceId,
+            ...(parsed.providerRef ? { providerRef: parsed.providerRef } : {}),
+            providerStatus: parsed.toStatus,
+            ...(parsed.reason ? { reason: parsed.reason } : {})
+          });
+        } else if (
           parsed.merchantId &&
           parsed.mode &&
           parsed.resourceId &&

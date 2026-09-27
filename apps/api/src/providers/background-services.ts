@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 
+import { startCollectionStatusPollingLoop } from "../collections";
 import type { AppDatabase } from "../db";
 import { ProviderCallbackService } from "./callbacks";
 import { ProviderCatalog } from "./catalog";
@@ -34,9 +35,15 @@ export function startProviderBackgroundServices(input: {
     database: input.database,
     ...(input.logger ? { logger: input.logger } : {})
   });
+  const collectionLoop = startCollectionStatusPollingLoop({
+    database: input.database,
+    ...(input.logger ? { logger: input.logger } : {}),
+    providerCatalog: catalog
+  });
 
   return {
     async stop() {
+      collectionLoop.stop();
       healthLoop.stop();
       await callbackService.close();
       await worker.close();

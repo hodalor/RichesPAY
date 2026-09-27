@@ -2,12 +2,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { buildApp } from "../src/app";
+import { CollectionStatusPollingService } from "../src/collections";
 import { createDatabasePool } from "../src/db/client";
 import { startDevPostgres } from "../src/db/dev-postgres";
 import { applySqlMigrations } from "../src/db/migrations";
 import { runWithSystemScope } from "../src/db/scope";
 import { LedgerService } from "../src/ledger";
 import { publicApiPlugin } from "../src/plugins/public-api";
+import { ProviderCatalog } from "../src/providers/catalog";
 import {
   createPlainApiKey,
   getApiKeyLast4,
@@ -278,6 +280,181 @@ describe("public v1 api", () => {
         customer_pays_minor: 5000,
         fee_minor: 175,
         merchant_receives_minor: 4825
+      }
+    });
+  });
+
+  it("creates a failed collection immediately for the simulator insufficient funds number", async () => {
+    const response = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-collection-failed"
+      },
+      method: "POST",
+      payload: {
+        amount: 5000,
+        currency: "GHS",
+        method: "mobile_money",
+        phone: "+233241230002",
+        reference: "merchant-ref-failed"
+      },
+      url: "/v1/collections"
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      data: {
+        amount: 5000,
+        currency: "GHS",
+        failure_code: "insufficient_funds",
+        fee_bearer: "merchant",
+        fee_minor: 175,
+        net_minor: 4825,
+        reference: "merchant-ref-failed",
+        status: "failed"
+      }
+    });
+
+    const outboxEvent = await builtApp.db
+      .selectFrom("events_outbox")
+      .select(["type"])
+      .where("merchant_id", "=", "mer_public_test")
+      .where("type", "=", "collection.failed")
+      .executeTakeFirst();
+
+    expect(outboxEvent?.type).toBe("collection.failed");
+  });
+
+  it("creates a processing collection and settles it through the polling job", async () => {
+    const response = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-collection-processing"
+      },
+      method: "POST",
+      payload: {
+        amount: 5000,
+        currency: "GHS",
+        customer: {
+          email: "customer@example.com",
+          name: "Customer One"
+        },
+        metadata: {
+          cart_id: "cart_123"
+        },
+        method: "mobile_money",
+        phone: "+233241230003",
+        reference: "merchant-ref-processing"
+      },
+      url: "/v1/collections"
+    });
+
+    expect(response.statusCode).toBe(201);
+    const created = response.json().data as {
+      id: string;
+      status: string;
+    };
+    expect(created.status).toBe("processing");
+
+    await runWithSystemScope(
+      builtApp.db,
+      "backdate collection polling schedule",
+      async (trx) => {
+        await trx
+          .updateTable("collections")
+          .set({
+            next_status_check_at: new Date(Date.now() - 1000)
+          })
+          .where("id", "=", created.id)
+          .execute();
+      },
+      { audit: false }
+    );
+
+    const pollingService = new CollectionStatusPollingService({
+      database: builtApp.db,
+      providerCatalog: new ProviderCatalog({
+        database: builtApp.db,
+        encryptionKey: env.ENCRYPTION_KEY
+      })
+    });
+
+    await pollingService.pollDueCollections();
+
+    const getResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`
+      },
+      method: "GET",
+      url: `/v1/collections/${created.id}`
+    });
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      data: {
+        id: created.id,
+        status: "successful"
+      }
+    });
+
+    const listResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`
+      },
+      method: "GET",
+      url: "/v1/collections?status=successful&reference=merchant-ref-processing"
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toMatchObject({
+      data: [
+        {
+          id: created.id,
+          reference: "merchant-ref-processing",
+          status: "successful"
+        }
+      ],
+      meta: {
+        has_more: false,
+        next_starting_after: null
+      }
+    });
+
+    const balances = await builtApp.db
+      .selectFrom("account_balances as ab")
+      .innerJoin("ledger_accounts as la", "la.id", "ab.account_id")
+      .select([
+        "la.type as type",
+        "ab.balance as balance"
+      ])
+      .where("la.merchant_id", "=", "mer_public_test")
+      .where("la.currency", "=", "GHS")
+      .where("la.type", "=", "merchant_available")
+      .executeTakeFirst();
+
+    expect(BigInt(String(balances?.balance ?? "0"))).toBe(5525n);
+  });
+
+  it("rejects a currency that does not match the phone country", async () => {
+    const response = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-collection-currency"
+      },
+      method: "POST",
+      payload: {
+        amount: 5000,
+        currency: "GHS",
+        method: "mobile_money",
+        phone: "+260971230003"
+      },
+      url: "/v1/collections"
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: "unsupported_currency"
       }
     });
   });

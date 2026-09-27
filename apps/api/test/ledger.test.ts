@@ -80,6 +80,7 @@ describe("ledger", () => {
           channelId: "mtn_momo_gh",
           collectionId: "col_balanced_001",
           currency,
+          feeAmount: 10n,
           merchantId,
           mode
         });
@@ -102,9 +103,16 @@ describe("ledger", () => {
       merchantId: null,
       mode
     });
+    const platformFeesBalance = await getBalance({
+      accountType: "platform_fees",
+      currency,
+      merchantId: null,
+      mode
+    });
 
-    expect(merchantAvailableBalance).toBe(100n);
+    expect(merchantAvailableBalance).toBe(90n);
     expect(providerClearingBalance).toBe(-100n);
+    expect(platformFeesBalance).toBe(10n);
     await expect(verifyBalances(database)).resolves.toEqual([]);
   });
 

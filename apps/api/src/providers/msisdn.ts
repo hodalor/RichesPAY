@@ -18,7 +18,7 @@ export async function detectNetworkFromMsisdn(
         .selectFrom("msisdn_prefixes")
         .select(["prefix", "network"])
         .where("country_code", "=", input.countryCode)
-        .orderBy("prefix desc")
+        .orderBy("prefix", "desc")
         .execute();
 
       return prefixes.find((entry) => normalized.startsWith(entry.prefix))?.network ?? null;
