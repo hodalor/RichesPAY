@@ -48,7 +48,7 @@ export class CheckoutService {
       input.merchantId,
       input.mode,
       async (trx) => {
-        await this.#ensureMerchantExists(trx, input.merchantId);
+        await this.#ensureMerchantCanCreateCheckout(trx, input.merchantId);
 
         const created = await trx
           .insertInto("checkout_sessions")
@@ -90,12 +90,15 @@ export class CheckoutService {
   }
 
   async submitSessionPaymentForMerchant(input: {
+    baseUrl: string | null;
     idempotencyKey: string | null;
+    method: CheckoutMethod;
     merchantId: string;
     mode: RpMode;
     network: string | null;
-    phone: string;
+    phone: string | null;
     requestId: string;
+    sessionUrl: string | null;
     sessionId: string;
   }): Promise<CheckoutSessionView> {
     return runWithMerchantScope(
@@ -106,7 +109,7 @@ export class CheckoutService {
         const session = await this.#loadSessionForUpdate(trx, input.sessionId);
         const synced = await this.#syncSessionState(trx, session);
         this.#assertSessionOpen(synced);
-        this.#assertMethodAllowed(synced, "mobile_money");
+        this.#assertMethodAllowed(synced, input.method);
 
         const existingCollection = await this.#loadLinkedCollection(trx, synced.collectionId);
         if (
@@ -118,6 +121,8 @@ export class CheckoutService {
 
         const collection = await this.#collectionService.create({
           amountMinor: synced.amount,
+          baseUrl: input.baseUrl,
+          cancelUrl: synced.cancelUrl,
           currency: synced.currency,
           customerEmail: synced.customer.email ?? null,
           customerName: synced.customer.name ?? null,
@@ -127,9 +132,11 @@ export class CheckoutService {
           metadata: {
             checkout_session_id: synced.id
           },
+          method: input.method,
           mode: input.mode,
-          network: input.network,
-          phone: input.phone,
+          network: input.method === "mobile_money" ? input.network : null,
+          phone: input.method === "mobile_money" ? input.phone : null,
+          returnUrl: input.sessionUrl,
           reference: null,
           requestId: input.requestId
         });
@@ -415,10 +422,13 @@ export class CheckoutService {
   }
 
   async submitSessionPaymentForPaymentLink(input: {
+    baseUrl: string | null;
     idempotencyKey: string | null;
+    method: CheckoutMethod;
     network: string | null;
-    phone: string;
+    phone: string | null;
     requestId: string;
+    sessionUrl: string | null;
     sessionId: string;
     slug: string;
   }): Promise<CheckoutSessionView> {
@@ -433,7 +443,7 @@ export class CheckoutService {
         );
         const synced = await this.#syncSessionState(trx, session);
         this.#assertSessionOpen(synced);
-        this.#assertMethodAllowed(synced, "mobile_money");
+        this.#assertMethodAllowed(synced, input.method);
 
         const existingCollection = await this.#loadLinkedCollection(trx, synced.collectionId);
         if (
@@ -445,6 +455,8 @@ export class CheckoutService {
 
         const collection = await this.#collectionService.create({
           amountMinor: synced.amount,
+          baseUrl: input.baseUrl,
+          cancelUrl: synced.cancelUrl,
           currency: synced.currency,
           customerEmail: synced.customer.email ?? null,
           customerName: synced.customer.name ?? null,
@@ -455,9 +467,11 @@ export class CheckoutService {
             checkout_session_id: synced.id,
             payment_link_slug: input.slug
           },
+          method: input.method,
           mode: synced.mode,
-          network: input.network,
-          phone: input.phone,
+          network: input.method === "mobile_money" ? input.network : null,
+          phone: input.method === "mobile_money" ? input.phone : null,
+          returnUrl: input.sessionUrl,
           reference: null,
           requestId: input.requestId
         });
@@ -496,9 +510,20 @@ export class CheckoutService {
       cancelUrl: session.cancelUrl,
       collection: collection
         ? {
+            card:
+              collection.card_brand || collection.card_last4 || collection.card_exp_month || collection.card_exp_year
+                ? {
+                    brand: collection.card_brand,
+                    expiryMonth: collection.card_exp_month,
+                    expiryYear: collection.card_exp_year,
+                    last4: collection.card_last4
+                  }
+                : null,
             failureCode: collection.failure_code,
             failureMessage: collection.failure_message,
             id: collection.id,
+            method: parseCollectionMethod(collection.method),
+            nextAction: parseCollectionNextAction(collection.provider_session),
             providerRef: collection.provider_ref,
             status: collection.status
           }
@@ -611,9 +636,15 @@ export class CheckoutService {
     return trx
       .selectFrom("collections")
       .select([
+        "card_brand",
+        "card_exp_month",
+        "card_exp_year",
+        "card_last4",
         "failure_code",
         "failure_message",
         "id",
+        "method",
+        "provider_session",
         "provider_ref",
         "status"
       ])
@@ -669,15 +700,34 @@ export class CheckoutService {
     }
   }
 
-  async #ensureMerchantExists(trx: ScopedTransaction, merchantId: string) {
+  async #ensureMerchantCanCreateCheckout(
+    trx: ScopedTransaction,
+    merchantId: string
+  ) {
     const merchant = await trx
       .selectFrom("merchants")
-      .select("id")
+      .select(["collections_frozen", "id", "status"])
       .where("id", "=", merchantId)
       .executeTakeFirst();
 
     if (!merchant) {
       throw notFoundError("Merchant not found");
+    }
+
+    if (merchant.status !== "active") {
+      throw new ApiRouteError({
+        code: "merchant_suspended",
+        message: getErrorDefinition("merchant_suspended").message,
+        statusCode: getErrorDefinition("merchant_suspended").status
+      });
+    }
+
+    if (merchant.collections_frozen) {
+      throw new ApiRouteError({
+        code: "collections_frozen",
+        message: getErrorDefinition("collections_frozen").message,
+        statusCode: getErrorDefinition("collections_frozen").status
+      });
     }
   }
 }
@@ -791,6 +841,37 @@ function mapPaymentLink(row: {
 
 function bigintOrNull(value: string | null) {
   return value === null ? null : BigInt(value);
+}
+
+function parseCollectionNextAction(value: Json) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.type === "hosted_fields" && typeof raw.iframe_url === "string") {
+    return {
+      iframeUrl: raw.iframe_url,
+      type: "hosted_fields" as const
+    };
+  }
+
+  if (raw.type === "redirect_url" && typeof raw.url === "string") {
+    return {
+      type: "redirect_url" as const,
+      url: raw.url
+    };
+  }
+
+  return null;
+}
+
+function parseCollectionMethod(value: string): "card" | "mobile_money" {
+  if (value === "card" || value === "mobile_money") {
+    return value;
+  }
+
+  throw new Error(`Unsupported checkout collection method: ${value}`);
 }
 
 function parseCheckoutMethods(value: CheckoutMethod[] | string): CheckoutMethod[] {

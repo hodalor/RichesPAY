@@ -8,7 +8,9 @@ import { startDevPostgres } from "../src/db/dev-postgres";
 import { applySqlMigrations } from "../src/db/migrations";
 import { runWithSystemScope } from "../src/db/scope";
 import { LedgerService } from "../src/ledger";
+import { PayoutProcessingService } from "../src/payouts";
 import { publicApiPlugin } from "../src/plugins/public-api";
+import { ProviderCallbackService } from "../src/providers";
 import { ProviderCatalog } from "../src/providers/catalog";
 import {
   createPlainApiKey,
@@ -27,6 +29,7 @@ describe("public v1 api", () => {
   let builtApp: Awaited<ReturnType<typeof buildApp>>;
   let checkoutPublicKey = "";
   let liveKey = "";
+  let noPayoutKey = "";
   let revokedKey = "";
   let testKey = "";
   let probeCallCount = 0;
@@ -59,6 +62,7 @@ describe("public v1 api", () => {
 
     checkoutPublicKey = createPlainApiKey("test", "public");
     liveKey = createPlainApiKey("live", "secret");
+    noPayoutKey = createPlainApiKey("test", "secret");
     revokedKey = createPlainApiKey("live", "secret");
     testKey = createPlainApiKey("test", "secret");
 
@@ -117,6 +121,20 @@ describe("public v1 api", () => {
               name: "Checkout public key",
               prefix: getApiKeyPrefix(checkoutPublicKey),
               revoked_at: null,
+              scopes: ["read", "collections", "payouts"]
+            },
+            {
+              created_by: "10000000-0000-0000-0000-000000000001",
+              id: "key_test_no_payouts",
+              ip_allowlist: null,
+              key_hash: hashApiKey(noPayoutKey, env.API_KEY_PEPPER),
+              kind: "secret",
+              last4: getApiKeyLast4(noPayoutKey),
+              merchant_id: "mer_public_test",
+              mode: "test",
+              name: "Test key without payouts",
+              prefix: getApiKeyPrefix(noPayoutKey),
+              revoked_at: null,
               scopes: ["read", "collections"]
             },
             {
@@ -131,7 +149,7 @@ describe("public v1 api", () => {
               name: "Live key",
               prefix: getApiKeyPrefix(liveKey),
               revoked_at: null,
-              scopes: ["read", "collections"]
+              scopes: ["read", "collections", "payouts"]
             },
             {
               created_by: "10000000-0000-0000-0000-000000000001",
@@ -159,7 +177,7 @@ describe("public v1 api", () => {
               name: "Test key",
               prefix: getApiKeyPrefix(testKey),
               revoked_at: null,
-              scopes: ["read", "collections"]
+              scopes: ["read", "collections", "payouts"]
             }
           ])
           .execute();
@@ -475,6 +493,284 @@ describe("public v1 api", () => {
     });
   });
 
+  it("requires payouts scope for mobile money refunds", async () => {
+    const createResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-mobile-refund-permission-collection"
+      },
+      method: "POST",
+      payload: {
+        amount: 5000,
+        currency: "GHS",
+        method: "mobile_money",
+        phone: "+233241230003",
+        reference: "merchant-ref-mobile-refund-permission"
+      },
+      url: "/v1/collections"
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json().data as {
+      id: string;
+    };
+
+    await runWithSystemScope(
+      builtApp.db,
+      "backdate mobile refund permission polling schedule",
+      async (trx) => {
+        await trx
+          .updateTable("collections")
+          .set({
+            next_status_check_at: new Date(Date.now() - 1000)
+          })
+          .where("id", "=", created.id)
+          .execute();
+      },
+      { audit: false }
+    );
+
+    const pollingService = new CollectionStatusPollingService({
+      database: builtApp.db,
+      providerCatalog: new ProviderCatalog({
+        database: builtApp.db,
+        encryptionKey: env.ENCRYPTION_KEY
+      })
+    });
+
+    await pollingService.pollDueCollections();
+
+    const refundResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${noPayoutKey}`,
+        "idempotency-key": "idem-mobile-refund-permission"
+      },
+      method: "POST",
+      payload: {},
+      url: `/v1/collections/${created.id}/refunds`
+    });
+
+    expect(refundResponse.statusCode).toBe(403);
+    expect(refundResponse.json()).toMatchObject({
+      error: {
+        code: "permission_denied"
+      }
+    });
+  });
+
+  it("rejects payouts when the merchant balance is insufficient", async () => {
+    const response = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-payout-insufficient-balance"
+      },
+      method: "POST",
+      payload: {
+        amount: 100000,
+        currency: "GHS",
+        method: "mobile_money",
+        phone: "+233241230001",
+        reference: "merchant-payout-insufficient"
+      },
+      url: "/v1/payouts"
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: "insufficient_funds"
+      }
+    });
+  });
+
+  it("rejects payouts for merchants with frozen payouts", async () => {
+    await runWithSystemScope(
+      builtApp.db,
+      "freeze payouts for test merchant",
+      async (trx) => {
+        await trx
+          .updateTable("merchants")
+          .set({
+            payouts_frozen: true,
+            payouts_freeze_reason: "compliance review"
+          })
+          .where("id", "=", "mer_public_test")
+          .where("mode", "=", "test")
+          .execute();
+      },
+      { audit: false }
+    );
+
+    try {
+      const response = await builtApp.app.inject({
+        headers: {
+          authorization: `Bearer ${testKey}`,
+          "idempotency-key": "idem-payouts-frozen"
+        },
+        method: "POST",
+        payload: {
+          amount: 200,
+          currency: "GHS",
+          method: "mobile_money",
+          phone: "+233241230001",
+          reference: "merchant-payout-frozen"
+        },
+        url: "/v1/payouts"
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({
+        error: {
+          code: "payouts_frozen"
+        }
+      });
+    } finally {
+      await runWithSystemScope(
+        builtApp.db,
+        "unfreeze payouts for test merchant",
+        async (trx) => {
+          await trx
+            .updateTable("merchants")
+            .set({
+              payouts_frozen: false,
+              payouts_freeze_reason: null
+            })
+            .where("id", "=", "mer_public_test")
+            .where("mode", "=", "test")
+            .execute();
+        },
+        { audit: false }
+      );
+    }
+  });
+
+  it("releases the payout hold when a queued payout is cancelled", async () => {
+    const holdBefore = await getMerchantPayoutHold("mer_public_test", "test");
+
+    const createResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-payout-cancel-create"
+      },
+      method: "POST",
+      payload: {
+        amount: 200,
+        currency: "GHS",
+        method: "mobile_money",
+        phone: "+233241230001",
+        reference: "merchant-payout-cancel"
+      },
+      url: "/v1/payouts"
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json().data as {
+      id: string;
+      total_hold_minor: number;
+    };
+
+    const holdAfterCreate = await getMerchantPayoutHold("mer_public_test", "test");
+    expect(holdAfterCreate - holdBefore).toBe(BigInt(created.total_hold_minor));
+
+    const cancelResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-payout-cancel-confirm"
+      },
+      method: "POST",
+      url: `/v1/payouts/${created.id}/cancel`
+    });
+
+    expect(cancelResponse.statusCode).toBe(200);
+    expect(cancelResponse.json()).toMatchObject({
+      data: {
+        id: created.id,
+        status: "cancelled"
+      }
+    });
+
+    const holdAfterCancel = await getMerchantPayoutHold("mer_public_test", "test");
+    expect(holdAfterCancel).toBe(holdBefore);
+  });
+
+  it("does not double-send payouts after a timeout before status polling resolves them", async () => {
+    const createResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-payout-timeout"
+      },
+      method: "POST",
+      payload: {
+        amount: 200,
+        currency: "GHS",
+        method: "mobile_money",
+        phone: "+233241230005",
+        reference: "merchant-payout-timeout"
+      },
+      url: "/v1/payouts"
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json().data as { id: string };
+
+    const processingService = new PayoutProcessingService({
+      database: builtApp.db,
+      providerCatalog: new ProviderCatalog({
+        database: builtApp.db,
+        encryptionKey: env.ENCRYPTION_KEY
+      })
+    });
+
+    await processingService.process();
+
+    let payoutRow = await builtApp.db
+      .selectFrom("payouts")
+      .select(["id", "send_attempts", "status"])
+      .where("id", "=", created.id)
+      .executeTakeFirstOrThrow();
+
+    expect(payoutRow.status).toBe("processing");
+    expect(payoutRow.send_attempts).toBe(1);
+
+    await processingService.process();
+
+    payoutRow = await builtApp.db
+      .selectFrom("payouts")
+      .select(["id", "send_attempts", "status"])
+      .where("id", "=", created.id)
+      .executeTakeFirstOrThrow();
+
+    expect(payoutRow.status).toBe("processing");
+    expect(payoutRow.send_attempts).toBe(1);
+
+    await runWithSystemScope(
+      builtApp.db,
+      "backdate payout polling schedule",
+      async (trx) => {
+        await trx
+          .updateTable("payouts")
+          .set({
+            next_status_check_at: new Date(Date.now() - 1000)
+          })
+          .where("id", "=", created.id)
+          .execute();
+      },
+      { audit: false }
+    );
+
+    await processingService.process();
+
+    const settledPayoutRow = await builtApp.db
+      .selectFrom("payouts")
+      .select(["id", "provider_ref", "send_attempts", "status"])
+      .where("id", "=", created.id)
+      .executeTakeFirstOrThrow();
+
+    expect(settledPayoutRow.status).toBe("successful");
+    expect(settledPayoutRow.send_attempts).toBe(1);
+    expect(settledPayoutRow.provider_ref).toContain("timeout_then_status_success");
+  });
+
   it("expires checkout sessions after their 30 minute window", async () => {
     const createResponse = await builtApp.app.inject({
       headers: {
@@ -610,6 +906,7 @@ describe("public v1 api", () => {
       },
       method: "POST",
       payload: {
+        method: "mobile_money",
         network: "mtn",
         phone: "+233241230003"
       },
@@ -673,6 +970,186 @@ describe("public v1 api", () => {
         status: "completed"
       }
     });
+  });
+
+  it("runs the hosted checkout card simulator flow and stores masked card details", async () => {
+    const createResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`
+      },
+      method: "POST",
+      payload: {
+        allowed_methods: ["card"],
+        amount: 5000,
+        currency: "GHS",
+        customer: {
+          email: "card-checkout@example.com",
+          name: "Card Checkout"
+        },
+        description: "Hosted card payment"
+      },
+      url: "/v1/checkout/sessions"
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json().data as {
+      id: string;
+    };
+
+    const payResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`,
+        "idempotency-key": "idem-checkout-card-simulator"
+      },
+      method: "POST",
+      payload: {
+        method: "card"
+      },
+      url: `/v1/checkout/sessions/${created.id}/pay`
+    });
+
+    expect(payResponse.statusCode).toBe(200);
+    expect(payResponse.json()).toMatchObject({
+      data: {
+        collection: {
+          method: "card",
+          next_action: {
+            iframe_url: expect.stringContaining("/simulator/card-fields?"),
+            type: "hosted_fields"
+          },
+          status: "processing"
+        },
+        id: created.id,
+        status: "open"
+      }
+    });
+
+    const collection = payResponse.json().data.collection as {
+      id: string;
+      provider_ref: string;
+    };
+
+    await processSimulatorCardCallback({
+      collectionId: collection.id,
+      expiryMonth: 3,
+      expiryYear: 2028,
+      last4: "0003",
+      providerRef: collection.provider_ref
+    });
+
+    const getResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`
+      },
+      method: "GET",
+      url: `/v1/checkout/sessions/${created.id}`
+    });
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      data: {
+        collection: {
+          card: {
+            brand: "visa",
+            expiry_month: 3,
+            expiry_year: 2028,
+            last4: "0003"
+          },
+          id: collection.id,
+          method: "card",
+          next_action: null,
+          status: "successful"
+        },
+        id: created.id,
+        status: "completed"
+      }
+    });
+  });
+
+  it("creates a card refund and writes the refund success event", async () => {
+    const createResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-card-refund-collection"
+      },
+      method: "POST",
+      payload: {
+        amount: 5000,
+        currency: "GHS",
+        customer: {
+          email: "refund-card@example.com",
+          name: "Refund Card"
+        },
+        method: "card",
+        reference: "merchant-ref-card-refund"
+      },
+      url: "/v1/collections"
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json().data as {
+      id: string;
+      provider_ref: string;
+      status: string;
+    };
+    expect(created.status).toBe("processing");
+
+    await processSimulatorCardCallback({
+      collectionId: created.id,
+      expiryMonth: 8,
+      expiryYear: 2029,
+      last4: "0001",
+      providerRef: created.provider_ref
+    });
+
+    const refundResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-card-refund-success"
+      },
+      method: "POST",
+      payload: {
+        amount: 2500
+      },
+      url: `/v1/collections/${created.id}/refunds`
+    });
+
+    expect(refundResponse.statusCode).toBe(201);
+    expect(refundResponse.json()).toMatchObject({
+      data: {
+        amount: 2500,
+        collection_id: created.id,
+        method: "card",
+        status: "successful"
+      }
+    });
+
+    const getResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`
+      },
+      method: "GET",
+      url: `/v1/collections/${created.id}`
+    });
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      data: {
+        id: created.id,
+        refunded_minor: 2500,
+        status: "successful"
+      }
+    });
+
+    const refundEvent = await builtApp.db
+      .selectFrom("events_outbox")
+      .select(["type"])
+      .where("merchant_id", "=", "mer_public_test")
+      .where("type", "=", "refund.successful")
+      .orderBy("created_at", "desc")
+      .executeTakeFirst();
+
+    expect(refundEvent?.type).toBe("refund.successful");
   });
 
   it("replays an idempotent response for the same key and body", async () => {
@@ -756,5 +1233,72 @@ describe("public v1 api", () => {
       },
       { audit: false }
     );
+  }
+
+  async function getMerchantPayoutHold(merchantId: string, mode: "live" | "test") {
+    const balance = await builtApp.db
+      .selectFrom("ledger_accounts as la")
+      .leftJoin("account_balances as ab", "ab.account_id", "la.id")
+      .select(["ab.balance as balance"])
+      .where("la.merchant_id", "=", merchantId)
+      .where("la.mode", "=", mode)
+      .where("la.type", "=", "merchant_payout_hold")
+      .where("la.currency", "=", "GHS")
+      .executeTakeFirst();
+
+    return BigInt(String(balance?.balance ?? "0"));
+  }
+
+  async function processSimulatorCardCallback(input: {
+    collectionId: string;
+    expiryMonth: number;
+    expiryYear: number;
+    last4: string;
+    providerRef: string;
+  }) {
+    const callbackService = new ProviderCallbackService({
+      catalog: new ProviderCatalog({
+        database: builtApp.db,
+        encryptionKey: env.ENCRYPTION_KEY
+      }),
+      database: builtApp.db
+    });
+
+    try {
+      const rawBody = JSON.stringify({
+        event_type: "collection.updated",
+        payment_instrument: {
+          brand: "visa",
+          expiry_month: input.expiryMonth,
+          expiry_year: input.expiryYear,
+          last4: input.last4
+        },
+        provider_ref: input.providerRef,
+        resource_id: input.collectionId,
+        resource_type: "collection",
+        to_status: "succeeded"
+      });
+
+      await callbackService.handleInboundCallback({
+        channelId: "chn_simulator_card_test",
+        headers: {
+          "content-type": "application/json",
+          "x-richespay-simulator-signature": "ok"
+        },
+        ip: "127.0.0.1",
+        rawBody
+      });
+
+      const callback = await builtApp.db
+        .selectFrom("provider_callbacks")
+        .select(["id"])
+        .where("channel_id", "=", "chn_simulator_card_test")
+        .orderBy("received_at", "desc")
+        .executeTakeFirstOrThrow();
+
+      await callbackService.processCallback(callback.id);
+    } finally {
+      await callbackService.close();
+    }
   }
 });

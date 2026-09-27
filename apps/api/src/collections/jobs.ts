@@ -26,7 +26,7 @@ export class CollectionStatusPollingService {
 
     for (const item of dueCollections) {
       try {
-        const provider = this.#providerCatalog.resolveMobileMoneyProvider({
+        const channel = {
           capabilities: item.capabilities,
           config: item.config,
           countryCode: item.countryCode,
@@ -39,7 +39,12 @@ export class CollectionStatusPollingService {
           priority: item.priority,
           providerCode: item.providerCode,
           status: item.channelStatus
-        });
+        } as const;
+
+        const provider =
+          item.kind === "card"
+            ? this.#providerCatalog.resolveCardAcquirer(channel)
+            : this.#providerCatalog.resolveMobileMoneyProvider(channel);
 
         const result = item.providerRef
           ? await provider.getStatus(item.providerRef)

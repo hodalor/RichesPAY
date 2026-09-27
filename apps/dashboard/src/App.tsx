@@ -24,16 +24,19 @@ import {
   Button,
   CopyField,
   DataTable,
+  Drawer,
   EmptyState,
   Input,
   Modal,
   PageHeader,
   Select,
+  Tabs,
   ToastProvider,
   useToast,
   type ColumnDef
 } from "@richespay/ui";
 import {
+  formatMoney,
   settlementCurrencyForCountry,
   type MerchantRole
 } from "@richespay/shared";
@@ -53,6 +56,42 @@ interface MembershipSummary {
 }
 
 interface DashboardSessionData {
+  compliance: {
+    collections_freeze_category:
+      | "chargeback_risk"
+      | "fraud_review"
+      | "kyb_review"
+      | "operations"
+      | "other"
+      | "regulatory"
+      | "sanctions_screening"
+      | null;
+    collections_freeze_reason: string | null;
+    collections_frozen: boolean;
+    contact_link: string;
+    payouts_freeze_category:
+      | "chargeback_risk"
+      | "fraud_review"
+      | "kyb_review"
+      | "operations"
+      | "other"
+      | "regulatory"
+      | "sanctions_screening"
+      | null;
+    payouts_freeze_reason: string | null;
+    payouts_frozen: boolean;
+    status: string;
+    suspension_category:
+      | "chargeback_risk"
+      | "fraud_review"
+      | "kyb_review"
+      | "operations"
+      | "other"
+      | "regulatory"
+      | "sanctions_screening"
+      | null;
+    suspension_reason: string | null;
+  };
   email: string | null;
   merchant_id: string;
   merchant_name: string;
@@ -61,6 +100,41 @@ interface DashboardSessionData {
   role: MerchantRole;
   settlement_currency: string;
   user_id: string;
+}
+
+interface DashboardTopup {
+  amount: number;
+  bank_reference: string | null;
+  collection_id: string | null;
+  completed_at: string | null;
+  confirmed_by: string | null;
+  created_at: string;
+  currency: string;
+  fee_minor: number;
+  id: string;
+  method: "mobile_money" | "card" | "bank_transfer";
+  next_action:
+    | {
+        iframe_url?: string;
+        type: "hosted_fields" | "redirect_url";
+        url?: string;
+      }
+    | null;
+  provider_ref: string | null;
+  status: "pending" | "successful" | "failed" | "expired";
+}
+
+interface BalanceAlertThreshold {
+  created_at: string;
+  currency: string;
+  is_below_threshold: boolean;
+  threshold_minor: number;
+  updated_at: string;
+}
+
+interface DashboardTopupSettings {
+  thresholds: BalanceAlertThreshold[];
+  transfer_reference: string;
 }
 
 interface TeamMember {
@@ -75,6 +149,17 @@ interface InvitePreview {
   expires_at: string;
   merchant_id: string;
   role: MerchantRole;
+}
+
+function formatComplianceCategoryLabel(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 interface AuthContextValue {
@@ -925,14 +1010,25 @@ function DashboardHomePage() {
   );
   const [sessionData, setSessionData] = React.useState<DashboardSessionData | null>(null);
   const [members, setMembers] = React.useState<TeamMember[]>([]);
+  const [topups, setTopups] = React.useState<DashboardTopup[]>([]);
+  const [topupSettings, setTopupSettings] = React.useState<DashboardTopupSettings | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [inviteOpen, setInviteOpen] = React.useState(false);
+  const [topupDrawerOpen, setTopupDrawerOpen] = React.useState(false);
   const [inviteEmail, setInviteEmail] = React.useState("");
   const [inviteRole, setInviteRole] = React.useState<MerchantRole>("viewer");
   const [latestInviteUrl, setLatestInviteUrl] = React.useState<string | null>(null);
   const [editingMember, setEditingMember] = React.useState<TeamMember | null>(null);
   const [nextRole, setNextRole] = React.useState<MerchantRole>("viewer");
   const [busyMemberId, setBusyMemberId] = React.useState<string | null>(null);
+  const [topupAmount, setTopupAmount] = React.useState("1500");
+  const [topupPhone, setTopupPhone] = React.useState("+233241230001");
+  const [topupNetwork, setTopupNetwork] = React.useState("mtn_momo");
+  const [topupCurrency, setTopupCurrency] = React.useState("GHS");
+  const [thresholdMinor, setThresholdMinor] = React.useState("500");
+  const [topupBusy, setTopupBusy] = React.useState(false);
+  const [thresholdBusy, setThresholdBusy] = React.useState(false);
+  const [selectedTopup, setSelectedTopup] = React.useState<DashboardTopup | null>(null);
 
   React.useEffect(() => {
     if (!auth.accessToken) {
@@ -998,6 +1094,28 @@ function DashboardHomePage() {
           }
         );
         setMembers(teamMembers);
+
+        const [loadedTopups, loadedTopupSettings] = await Promise.all([
+          apiRequest<DashboardTopup[]>("/dashboard/v1/topups", {
+            accessToken: auth.accessToken,
+            merchantId: selectedMerchantId
+          }),
+          apiRequest<DashboardTopupSettings>("/dashboard/v1/topups/settings", {
+            accessToken: auth.accessToken,
+            merchantId: selectedMerchantId
+          })
+        ]);
+
+        setTopups(loadedTopups);
+        setTopupSettings(loadedTopupSettings);
+        setTopupCurrency(session.settlement_currency);
+        setThresholdMinor(
+          String(
+            loadedTopupSettings.thresholds.find(
+              (threshold) => threshold.currency === session.settlement_currency
+            )?.threshold_minor ?? 500
+          )
+        );
       } catch (error) {
         if (error instanceof ApiError && error.code === "mfa_required") {
           navigate("/enter-2fa", { replace: true });
@@ -1020,6 +1138,7 @@ function DashboardHomePage() {
     label: `${membership.merchant_name} (${membership.mode})`,
     value: membership.merchant_id
   }));
+  const isMerchantSuspended = sessionData?.compliance.status === "suspended";
 
   const columns = React.useMemo<ColumnDef<TeamMember>[]>(
     () => [
@@ -1044,6 +1163,7 @@ function DashboardHomePage() {
         cell: ({ row }) => (
           <div className="flex gap-2">
             <Button
+              disabled={isMerchantSuspended}
               onClick={() => {
                 setEditingMember(row.original);
                 setNextRole(row.original.role);
@@ -1053,6 +1173,7 @@ function DashboardHomePage() {
               Change role
             </Button>
             <Button
+              disabled={isMerchantSuspended}
               onClick={async () => {
                 if (!auth.accessToken || !sessionData) {
                   return;
@@ -1092,8 +1213,71 @@ function DashboardHomePage() {
         )
       }
     ],
-    [auth.accessToken, busyMemberId, pushToast, sessionData]
+    [auth.accessToken, busyMemberId, isMerchantSuspended, pushToast, sessionData]
   );
+
+  const topupColumns = React.useMemo<ColumnDef<DashboardTopup>[]>(
+    () => [
+      {
+        accessorKey: "created_at",
+        header: "Created",
+        cell: ({ row }) =>
+          new Date(row.original.created_at).toLocaleString()
+      },
+      {
+        accessorKey: "method",
+        header: "Method",
+        cell: ({ row }) => row.original.method.replace("_", " ")
+      },
+      {
+        accessorKey: "amount",
+        header: "Amount",
+        cell: ({ row }) =>
+          formatMoney(
+            BigInt(row.original.amount),
+            row.original.currency as "GHS" | "USD" | "ZMW",
+            "en-US"
+          )
+      },
+      {
+        accessorKey: "status",
+        header: "Status",
+        cell: ({ row }) => row.original.status
+      }
+    ],
+    []
+  );
+
+  React.useEffect(() => {
+    if (!auth.accessToken || !sessionData || !selectedTopup || selectedTopup.status !== "pending") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void (async () => {
+        try {
+          const refreshed = await apiRequest<DashboardTopup>(
+            `/dashboard/v1/topups/${selectedTopup.id}`,
+            {
+              accessToken: auth.accessToken,
+              merchantId: sessionData.merchant_id
+            }
+          );
+
+          setSelectedTopup(refreshed);
+          setTopups((current) =>
+            current.map((topup) => (topup.id === refreshed.id ? refreshed : topup))
+          );
+        } catch {
+          // Keep polling light and silent inside the drawer.
+        }
+      })();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [auth.accessToken, selectedTopup, sessionData]);
 
   if (loading) {
     return (
@@ -1131,6 +1315,37 @@ function DashboardHomePage() {
       </AuthSplitLayout>
     );
   }
+
+  const isSuspended = sessionData.compliance.status === "suspended";
+  const complianceBanners = [
+    isSuspended
+      ? {
+          category: formatComplianceCategoryLabel(
+            sessionData.compliance.suspension_category
+          ),
+          reason: sessionData.compliance.suspension_reason,
+          tone: "border-danger/30 bg-danger/10 text-danger"
+        }
+      : null,
+    sessionData.compliance.collections_frozen
+      ? {
+          category: formatComplianceCategoryLabel(
+            sessionData.compliance.collections_freeze_category
+          ),
+          reason: sessionData.compliance.collections_freeze_reason,
+          tone: "border-warning/40 bg-warning/10 text-amber-900"
+        }
+      : null,
+    sessionData.compliance.payouts_frozen
+      ? {
+          category: formatComplianceCategoryLabel(
+            sessionData.compliance.payouts_freeze_category
+          ),
+          reason: sessionData.compliance.payouts_freeze_reason,
+          tone: "border-warning/40 bg-warning/10 text-amber-900"
+        }
+      : null
+  ].filter(Boolean);
 
   return (
     <>
@@ -1184,17 +1399,62 @@ function DashboardHomePage() {
         }
       >
         <div className="space-y-6">
+          {complianceBanners.map((banner, index) =>
+            banner ? (
+              <div
+                className={`rounded-card border px-4 py-3 text-sm ${banner.tone}`}
+                key={`${banner.category ?? "notice"}-${index}`}
+              >
+                <p className="font-semibold">
+                  {isSuspended && index === 0
+                    ? "Merchant suspended"
+                    : index === 1 && sessionData.compliance.collections_frozen
+                      ? "Collections frozen"
+                      : "Payouts frozen"}
+                </p>
+                <p className="mt-1">
+                  {banner.category ? `${banner.category}. ` : ""}
+                  {banner.reason ?? "RichesPay has applied a temporary control to this merchant."}
+                </p>
+                <a
+                  className="mt-2 inline-flex text-sm underline"
+                  href={sessionData.compliance.contact_link}
+                >
+                  Contact RichesPay compliance
+                </a>
+              </div>
+            ) : null
+          )}
           <PageHeader
             action={
-              <Button
-                leadingIcon={<Mail className="size-4" />}
-                onClick={() => {
-                  setInviteOpen(true);
-                }}
-                variant="primary"
-              >
-                Invite teammate
-              </Button>
+              <div className="flex gap-3">
+                <Button
+                  disabled={isSuspended}
+                  onClick={() => {
+                    if (isSuspended) {
+                      return;
+                    }
+                    setSelectedTopup(null);
+                    setTopupDrawerOpen(true);
+                  }}
+                  variant="primary"
+                >
+                  Top up balance
+                </Button>
+                <Button
+                  disabled={isSuspended}
+                  leadingIcon={<Mail className="size-4" />}
+                  onClick={() => {
+                    if (isSuspended) {
+                      return;
+                    }
+                    setInviteOpen(true);
+                  }}
+                  variant="secondary"
+                >
+                  Invite teammate
+                </Button>
+              </div>
             }
             subtitle={`Signed in as ${sessionData.email ?? "unknown email"} with ${sessionData.role} access.`}
             title={sessionData.merchant_name}
@@ -1231,6 +1491,151 @@ function DashboardHomePage() {
               limit: members.length || 10
             }}
           />
+          <section className="space-y-4 rounded-card border border-border bg-white p-5 shadow-softer">
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-text">Balance top-ups</h2>
+                <p className="mt-1 text-sm text-text-secondary">
+                  Use mobile money, card, bank transfer, or test funds to add to your merchant balance.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <div className="rounded-input border border-border bg-surface-subtle px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.16em] text-text-muted">
+                    Bank transfer reference
+                  </p>
+                  <p className="mt-1 font-semibold text-text">
+                    {topupSettings?.transfer_reference ?? "Loading..."}
+                  </p>
+                </div>
+                {sessionData.mode === "test" ? (
+                  <Button
+                    disabled={isSuspended}
+                    onClick={async () => {
+                      if (!auth.accessToken) {
+                        return;
+                      }
+
+                      setTopupBusy(true);
+                      try {
+                        const created = await apiRequest<DashboardTopup>(
+                          "/dashboard/v1/topups/test-funds",
+                          {
+                            accessToken: auth.accessToken,
+                            body: JSON.stringify({
+                              amount: Number(topupAmount),
+                              currency: topupCurrency
+                            }),
+                            merchantId: sessionData.merchant_id,
+                            method: "POST"
+                          }
+                        );
+
+                        setTopups((current) => [created, ...current]);
+                        setSelectedTopup(created);
+                        setTopupDrawerOpen(true);
+                      } catch (error) {
+                        pushToast({
+                          description:
+                            error instanceof ApiError ? error.message : "Unable to add test funds",
+                          title: "Test funds failed",
+                          variant: "danger"
+                        });
+                      } finally {
+                        setTopupBusy(false);
+                      }
+                    }}
+                    variant="secondary"
+                  >
+                    Add test funds
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex flex-col gap-3 md:flex-row md:items-end">
+              <Input
+                label={`Low-balance threshold (${sessionData.settlement_currency})`}
+                onChange={(event) => {
+                  setThresholdMinor(event.target.value);
+                }}
+                value={thresholdMinor}
+              />
+              <Button
+                disabled={isSuspended}
+                loading={thresholdBusy}
+                onClick={async () => {
+                  if (!auth.accessToken) {
+                    return;
+                  }
+
+                  setThresholdBusy(true);
+                  try {
+                    const threshold = await apiRequest<BalanceAlertThreshold>(
+                      `/dashboard/v1/topups/alerts/${sessionData.settlement_currency}`,
+                      {
+                        accessToken: auth.accessToken,
+                        body: JSON.stringify({
+                          threshold_minor: Number(thresholdMinor)
+                        }),
+                        merchantId: sessionData.merchant_id,
+                        method: "PUT"
+                      }
+                    );
+
+                    setTopupSettings((current) =>
+                      current
+                        ? {
+                            ...current,
+                            thresholds: [
+                              threshold,
+                              ...current.thresholds.filter(
+                                (entry) => entry.currency !== threshold.currency
+                              )
+                            ]
+                          }
+                        : current
+                    );
+                    pushToast({
+                      description: "Low-balance threshold saved.",
+                      title: "Threshold updated",
+                      variant: "success"
+                    });
+                  } catch (error) {
+                    pushToast({
+                      description:
+                        error instanceof ApiError ? error.message : "Unable to save threshold",
+                      title: "Threshold update failed",
+                      variant: "danger"
+                    });
+                  } finally {
+                    setThresholdBusy(false);
+                  }
+                }}
+                variant="secondary"
+              >
+                Save threshold
+              </Button>
+            </div>
+            <DataTable
+              columns={topupColumns}
+              data={topups}
+              emptyState={
+                <EmptyState
+                  description="Create your first balance top-up to fund payouts or SMS."
+                  title="No top-ups yet"
+                />
+              }
+              onRowClick={(row) => {
+                setSelectedTopup(row);
+                setTopupDrawerOpen(true);
+              }}
+              pageInfo={{
+                hasNextPage: false,
+                hasPreviousPage: false,
+                limit: topups.length || 10
+              }}
+            />
+          </section>
         </div>
       </AppShell>
 
@@ -1258,6 +1663,7 @@ function DashboardHomePage() {
             value={inviteRole}
           />
           <Button
+            disabled={isSuspended}
             className="w-full"
             onClick={async () => {
               if (!auth.accessToken || !sessionData) {
@@ -1301,6 +1707,278 @@ function DashboardHomePage() {
           {latestInviteUrl ? <CopyField label="Invite URL" value={latestInviteUrl} /> : null}
         </div>
       </Modal>
+
+      <Drawer
+        description="Choose a funding method, start a top-up, and keep an eye on the live status."
+        onOpenChange={setTopupDrawerOpen}
+        open={topupDrawerOpen}
+        title="Top up balance"
+      >
+        <Tabs
+          defaultValue="mobile_money"
+          items={[
+            {
+              label: "Mobile money",
+              value: "mobile_money",
+              content: (
+                <div className="space-y-4">
+                  <Input
+                    label="Amount"
+                    onChange={(event) => {
+                      setTopupAmount(event.target.value);
+                    }}
+                    value={topupAmount}
+                  />
+                  <Select
+                    label="Currency"
+                    onValueChange={setTopupCurrency}
+                    options={[
+                      {
+                        label: sessionData.settlement_currency,
+                        value: sessionData.settlement_currency
+                      }
+                    ]}
+                    value={topupCurrency}
+                  />
+                  <Input
+                    label="Phone"
+                    onChange={(event) => {
+                      setTopupPhone(event.target.value);
+                    }}
+                    value={topupPhone}
+                  />
+                  <Select
+                    label="Network"
+                    onValueChange={setTopupNetwork}
+                    options={[
+                      { label: "MTN MoMo", value: "mtn_momo" },
+                      { label: "Telecel Cash", value: "telecel_cash" },
+                      { label: "AT Money", value: "at_money" }
+                    ]}
+                    value={topupNetwork}
+                  />
+                  <Button
+                    className="w-full"
+                    loading={topupBusy}
+                    onClick={async () => {
+                      if (!auth.accessToken) {
+                        return;
+                      }
+
+                      setTopupBusy(true);
+                      try {
+                        const created = await apiRequest<DashboardTopup>("/dashboard/v1/topups", {
+                          accessToken: auth.accessToken,
+                          body: JSON.stringify({
+                            amount: Number(topupAmount),
+                            currency: topupCurrency,
+                            method: "mobile_money",
+                            network: topupNetwork,
+                            phone: topupPhone
+                          }),
+                          merchantId: sessionData.merchant_id,
+                          method: "POST"
+                        });
+
+                        setSelectedTopup(created);
+                        setTopups((current) => [created, ...current]);
+                      } catch (error) {
+                        pushToast({
+                          description:
+                            error instanceof ApiError ? error.message : "Unable to create top-up",
+                          title: "Top-up failed",
+                          variant: "danger"
+                        });
+                      } finally {
+                        setTopupBusy(false);
+                      }
+                    }}
+                    variant="primary"
+                  >
+                    Start mobile money top-up
+                  </Button>
+                </div>
+              )
+            },
+            {
+              label: "Card",
+              value: "card",
+              content: (
+                <div className="space-y-4">
+                  <Input
+                    label="Amount"
+                    onChange={(event) => {
+                      setTopupAmount(event.target.value);
+                    }}
+                    value={topupAmount}
+                  />
+                  <Select
+                    label="Currency"
+                    onValueChange={setTopupCurrency}
+                    options={[
+                      {
+                        label: sessionData.settlement_currency,
+                        value: sessionData.settlement_currency
+                      }
+                    ]}
+                    value={topupCurrency}
+                  />
+                  <Button
+                    className="w-full"
+                    loading={topupBusy}
+                    onClick={async () => {
+                      if (!auth.accessToken) {
+                        return;
+                      }
+
+                      setTopupBusy(true);
+                      try {
+                        const created = await apiRequest<DashboardTopup>("/dashboard/v1/topups", {
+                          accessToken: auth.accessToken,
+                          body: JSON.stringify({
+                            amount: Number(topupAmount),
+                            currency: topupCurrency,
+                            method: "card"
+                          }),
+                          merchantId: sessionData.merchant_id,
+                          method: "POST"
+                        });
+
+                        setSelectedTopup(created);
+                        setTopups((current) => [created, ...current]);
+                      } catch (error) {
+                        pushToast({
+                          description:
+                            error instanceof ApiError ? error.message : "Unable to create top-up",
+                          title: "Top-up failed",
+                          variant: "danger"
+                        });
+                      } finally {
+                        setTopupBusy(false);
+                      }
+                    }}
+                    variant="primary"
+                  >
+                    Start card top-up
+                  </Button>
+                </div>
+              )
+            },
+            {
+              label: "Bank transfer",
+              value: "bank_transfer",
+              content: (
+                <div className="space-y-4">
+                  <Input
+                    label="Amount"
+                    onChange={(event) => {
+                      setTopupAmount(event.target.value);
+                    }}
+                    value={topupAmount}
+                  />
+                  <Select
+                    label="Currency"
+                    onValueChange={setTopupCurrency}
+                    options={[
+                      {
+                        label: sessionData.settlement_currency,
+                        value: sessionData.settlement_currency
+                      }
+                    ]}
+                    value={topupCurrency}
+                  />
+                  <div className="rounded-card border border-border bg-surface-subtle p-4 text-sm text-text-secondary">
+                    Send the transfer to the RichesPay settlement account and include{" "}
+                    <strong className="text-text">
+                      {topupSettings?.transfer_reference ?? "Loading..."}
+                    </strong>{" "}
+                    as the reference. We’ll confirm it from the bank statement or through an admin review.
+                  </div>
+                  <Button
+                    className="w-full"
+                    loading={topupBusy}
+                    onClick={async () => {
+                      if (!auth.accessToken) {
+                        return;
+                      }
+
+                      setTopupBusy(true);
+                      try {
+                        const created = await apiRequest<DashboardTopup>("/dashboard/v1/topups", {
+                          accessToken: auth.accessToken,
+                          body: JSON.stringify({
+                            amount: Number(topupAmount),
+                            currency: topupCurrency,
+                            method: "bank_transfer"
+                          }),
+                          merchantId: sessionData.merchant_id,
+                          method: "POST"
+                        });
+
+                        setSelectedTopup(created);
+                        setTopups((current) => [created, ...current]);
+                      } catch (error) {
+                        pushToast({
+                          description:
+                            error instanceof ApiError ? error.message : "Unable to create top-up",
+                          title: "Top-up failed",
+                          variant: "danger"
+                        });
+                      } finally {
+                        setTopupBusy(false);
+                      }
+                    }}
+                    variant="primary"
+                  >
+                    Create bank transfer top-up
+                  </Button>
+                </div>
+              )
+            }
+          ]}
+        />
+        {selectedTopup ? (
+          <div className="space-y-4 rounded-card border border-border bg-surface-subtle p-4">
+            <div>
+              <p className="text-sm text-text-secondary">Latest top-up</p>
+              <p className="mt-1 text-base font-semibold text-text">
+                {formatMoney(
+                  BigInt(selectedTopup.amount),
+                  selectedTopup.currency as "GHS" | "USD" | "ZMW",
+                  "en-US"
+                )}{" "}
+                · {selectedTopup.status}
+              </p>
+            </div>
+            {selectedTopup.method === "mobile_money" && selectedTopup.status === "pending" ? (
+              <p className="text-sm text-text-secondary">
+                Approve the prompt on the customer phone, then keep this drawer open while we poll the live status.
+              </p>
+            ) : null}
+            {selectedTopup.bank_reference ? (
+              <CopyField label="Transfer reference" value={selectedTopup.bank_reference} />
+            ) : null}
+            {selectedTopup.next_action?.type === "redirect_url" && selectedTopup.next_action.url ? (
+              <a
+                className="inline-flex rounded-input border border-border px-4 py-2 text-sm font-medium text-brand hover:bg-brand-50"
+                href={selectedTopup.next_action.url}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Continue secure payment
+              </a>
+            ) : null}
+            {selectedTopup.next_action?.type === "hosted_fields" &&
+            selectedTopup.next_action.iframe_url ? (
+              <iframe
+                className="h-[420px] w-full rounded-card border border-border bg-white"
+                src={selectedTopup.next_action.iframe_url}
+                title="Card top-up"
+              />
+            ) : null}
+          </div>
+        ) : null}
+      </Drawer>
 
       <Modal
         description="Change this teammate’s dashboard access role."

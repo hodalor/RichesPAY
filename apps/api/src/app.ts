@@ -13,7 +13,7 @@ import {
 import Fastify from "fastify";
 import IORedis from "ioredis";
 
-import { createApiErrorEnvelope, isErrorCode } from "@richespay/shared";
+import { createApiErrorEnvelope, getErrorDefinition, isErrorCode } from "@richespay/shared";
 
 import {
   createDatabase,
@@ -144,25 +144,31 @@ export async function buildApp(env: AppEnv) {
         ? error.statusCode
         : 500;
 
-    if (statusCode >= 500) {
+    const explicitCode =
+      extractErrorCode(error) ||
+      (isErrorCode(errorMessage) ? errorMessage : null);
+    const resolvedStatusCode = explicitCode
+      ? getErrorDefinition(explicitCode).status
+      : statusCode;
+
+    if (resolvedStatusCode >= 500) {
       request.log.error({ err: error }, "Unhandled request error");
     }
 
-    const explicitCode = extractErrorCode(error);
     const code = explicitCode
       ? explicitCode
-      : statusCode === 401
+      : resolvedStatusCode === 401
         ? "unauthorized"
-        : statusCode === 403
+        : resolvedStatusCode === 403
           ? "forbidden"
-          : statusCode === 404
+          : resolvedStatusCode === 404
             ? "not_found"
             : "internal_error";
 
-    return reply.status(statusCode).send(
+    return reply.status(resolvedStatusCode).send(
       createApiErrorEnvelope({
         code: isErrorCode(code) ? code : "internal_error",
-        message: statusCode >= 500 ? "Internal server error" : errorMessage,
+        message: resolvedStatusCode >= 500 ? "Internal server error" : errorMessage,
         request_id: requestId
       })
     );

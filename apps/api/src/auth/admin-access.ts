@@ -86,10 +86,21 @@ export async function runAdminSystemWrite<T>(
     action: string;
     actorId: string;
     after?: Json;
+    auditFromResult?: (result: T) => {
+      after?: Json;
+      before?: Json | null;
+      merchantId?: string | null;
+      mode?: "live" | "test";
+      targetId?: string | null;
+    };
     before?: Json | null;
+    ip?: string | null;
+    merchantId?: string | null;
+    mode?: "live" | "test";
     reason: string;
     targetId?: string | null;
     targetType: string;
+    userAgent?: string | null;
   },
   fn: (trx: ScopedTransaction) => Promise<T>
 ): Promise<T> {
@@ -98,6 +109,7 @@ export async function runAdminSystemWrite<T>(
     input.reason,
     async (trx) => {
       const result = await fn(trx);
+      const derivedAudit = input.auditFromResult?.(result);
 
       await trx
         .insertInto("audit_logs")
@@ -105,16 +117,16 @@ export async function runAdminSystemWrite<T>(
           action: input.action,
           actor_id: input.actorId,
           actor_type: "admin",
-          after: input.after ?? null,
-          before: input.before ?? null,
+          after: derivedAudit?.after ?? input.after ?? null,
+          before: derivedAudit?.before ?? input.before ?? null,
           id: newId("aud_"),
-          ip: null,
-          merchant_id: null,
-          mode: "live",
+          ip: input.ip ?? null,
+          merchant_id: derivedAudit?.merchantId ?? input.merchantId ?? null,
+          mode: derivedAudit?.mode ?? input.mode ?? "live",
           reason: input.reason,
-          target_id: input.targetId ?? null,
+          target_id: derivedAudit?.targetId ?? input.targetId ?? null,
           target_type: input.targetType,
-          user_agent: null
+          user_agent: input.userAgent ?? null
         })
         .execute();
 

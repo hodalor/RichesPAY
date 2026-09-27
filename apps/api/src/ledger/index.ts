@@ -9,6 +9,7 @@ export type {
   ManualAdjustmentAccount,
   ManualAdjustmentParams,
   PayoutHoldParams,
+  TopupCreditParams,
   ReleasePayoutHoldParams
 } from "./service";
 export type { BalanceMismatch, VerifyBalancesOptions } from "./verify-balances";

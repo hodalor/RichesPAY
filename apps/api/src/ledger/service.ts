@@ -29,8 +29,16 @@ interface ProviderMoneyParams extends MerchantMoneyParams {
 interface CollectionCreditParams extends ProviderMoneyParams {
   collectionId: string;
   description?: string;
-  destinationAccountType?: "merchant_available" | "merchant_reserve";
   feeAmount?: bigint;
+  reserveAmount?: bigint;
+}
+
+interface TopupCreditParams extends MerchantMoneyParams {
+  channelId?: string;
+  description?: string;
+  feeAmount?: bigint;
+  sourceAccountType?: "provider_clearing" | "suspense";
+  topupId: string;
 }
 
 interface PayoutHoldParams extends MerchantMoneyParams {
@@ -118,6 +126,7 @@ export class LedgerService {
     params: CollectionCreditParams
   ): Promise<LedgerJournalEntry> {
     const feeAmount = params.feeAmount ?? 0n;
+    const reserveAmount = params.reserveAmount ?? 0n;
     if (feeAmount < 0n) {
       throw new Error("Collection fee cannot be negative");
     }
@@ -127,6 +136,15 @@ export class LedgerService {
     }
 
     const destinationAmount = params.amount - feeAmount;
+    if (reserveAmount < 0n) {
+      throw new Error("Collection reserve cannot be negative");
+    }
+
+    if (reserveAmount > destinationAmount) {
+      throw new Error("Collection reserve cannot exceed merchant proceeds");
+    }
+
+    const availableAmount = destinationAmount - reserveAmount;
 
     return this.createJournal({
       currency: params.currency,
@@ -143,13 +161,23 @@ export class LedgerService {
           amount: params.amount,
           direction: "debit"
         },
-        ...(destinationAmount > 0n
+        ...(availableAmount > 0n
           ? [{
               account: {
                 merchantId: params.merchantId,
-                type: params.destinationAccountType ?? "merchant_available"
+                type: "merchant_available" as const
               },
-              amount: destinationAmount,
+              amount: availableAmount,
+              direction: "credit" as const
+            }]
+          : []),
+        ...(reserveAmount > 0n
+          ? [{
+              account: {
+                merchantId: params.merchantId,
+                type: "merchant_reserve" as const
+              },
+              amount: reserveAmount,
               direction: "credit" as const
             }]
           : []),
@@ -166,6 +194,69 @@ export class LedgerService {
       ],
       referenceId: params.collectionId,
       referenceType: "collection"
+    });
+  }
+
+  async creditTopup(params: TopupCreditParams): Promise<LedgerJournalEntry> {
+    const feeAmount = params.feeAmount ?? 0n;
+    if (feeAmount < 0n) {
+      throw new Error("Top-up fee cannot be negative");
+    }
+
+    if (feeAmount > params.amount) {
+      throw new Error("Top-up fee cannot exceed the funded amount");
+    }
+
+    const destinationAmount = params.amount - feeAmount;
+    const sourceAccountType = params.sourceAccountType ?? "provider_clearing";
+
+    if (sourceAccountType === "provider_clearing" && !params.channelId) {
+      throw new Error("Top-up provider clearing requires a channel");
+    }
+
+    return this.createJournal({
+      currency: params.currency,
+      description: params.description ?? `Credit top-up ${params.topupId}`,
+      mode: params.mode,
+      postings: [
+        {
+          account:
+            sourceAccountType === "provider_clearing"
+              ? {
+                  channelId: params.channelId!,
+                  merchantId: null,
+                  type: "provider_clearing"
+                }
+              : {
+                  merchantId: null,
+                  type: "suspense"
+                },
+          amount: params.amount,
+          direction: "debit"
+        },
+        ...(destinationAmount > 0n
+          ? [{
+              account: {
+                merchantId: params.merchantId,
+                type: "merchant_available" as const
+              },
+              amount: destinationAmount,
+              direction: "credit" as const
+            }]
+          : []),
+        ...(feeAmount > 0n
+          ? [{
+              account: {
+                merchantId: null,
+                type: "platform_fees" as const
+              },
+              amount: feeAmount,
+              direction: "credit" as const
+            }]
+          : [])
+      ],
+      referenceId: params.topupId,
+      referenceType: "topup"
     });
   }
 
@@ -554,6 +645,7 @@ export type {
   ManualAdjustmentAccount,
   ManualAdjustmentParams,
   PayoutHoldParams,
+  TopupCreditParams,
   ReleasePayoutHoldParams
 };
 

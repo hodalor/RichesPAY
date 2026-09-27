@@ -60,8 +60,9 @@ const hostedCheckoutSessionCreateBodySchema = z.object({
 });
 
 const checkoutPayBodySchema = z.object({
+  method: z.enum(checkoutMethods),
   network: z.string().min(1).optional(),
-  phone: z.string().min(4)
+  phone: z.string().min(4).optional()
 });
 
 const checkoutSessionResponseSchema = z.object({
@@ -71,9 +72,25 @@ const checkoutSessionResponseSchema = z.object({
   cancel_url: z.string().nullable(),
   collection: z
     .object({
+      card: z
+        .object({
+          brand: z.string().nullable(),
+          expiry_month: z.number().int().nullable(),
+          expiry_year: z.number().int().nullable(),
+          last4: z.string().nullable()
+        })
+        .nullable(),
       failure_code: z.string().nullable(),
       failure_message: z.string().nullable(),
       id: z.string(),
+      method: z.enum(checkoutMethods),
+      next_action: z
+        .object({
+          iframe_url: z.string().url().optional(),
+          type: z.enum(["hosted_fields", "redirect_url"]),
+          url: z.string().url().optional()
+        })
+        .nullable(),
       provider_ref: z.string().nullable(),
       status: z.string()
     })
@@ -230,10 +247,13 @@ export async function registerCheckoutRoutes(app: FastifyTypedInstance) {
       }
 
       const updatedSession = await checkoutService.submitSessionPaymentForPaymentLink({
+        baseUrl: getRequestBaseUrl(request),
         idempotencyKey: idempotencyState.key,
+        method: body.method,
         network: body.network ?? null,
-        phone: body.phone,
+        phone: body.phone ?? null,
         requestId: request.id,
+        sessionUrl: `${app.appEnv.CHECKOUT_ORIGIN}/link/${params.slug}?session_id=${encodeURIComponent(params.id)}`,
         sessionId: params.id,
         slug: params.slug
       });
@@ -349,12 +369,15 @@ export async function registerCheckoutRoutes(app: FastifyTypedInstance) {
         request.assertApiKeyScope("collections");
 
         const session = await checkoutService.submitSessionPaymentForMerchant({
+          baseUrl: getRequestBaseUrl(request),
           idempotencyKey: request.idempotencyState?.key ?? null,
+          method: body.method,
           merchantId: request.publicApiKey!.merchantId,
           mode: request.publicApiKey!.mode,
           network: body.network ?? null,
-          phone: body.phone,
+          phone: body.phone ?? null,
           requestId: request.id,
+          sessionUrl: `${app.appEnv.CHECKOUT_ORIGIN}/session/${params.id}?key=${encodeURIComponent(parseApiKey(request.headers.authorization)?.value ?? "")}`,
           sessionId: params.id
         });
 
@@ -374,9 +397,29 @@ function serializeCheckoutSession(session: CheckoutSessionView) {
     cancel_url: session.cancelUrl,
     collection: session.collection
       ? {
+          card: session.collection.card
+            ? {
+                brand: session.collection.card.brand,
+                expiry_month: session.collection.card.expiryMonth,
+                expiry_year: session.collection.card.expiryYear,
+                last4: session.collection.card.last4
+              }
+            : null,
           failure_code: session.collection.failureCode,
           failure_message: session.collection.failureMessage,
           id: session.collection.id,
+          method: session.collection.method,
+          next_action: session.collection.nextAction
+            ? {
+                ...(session.collection.nextAction.iframeUrl
+                  ? { iframe_url: session.collection.nextAction.iframeUrl }
+                  : {}),
+                type: session.collection.nextAction.type,
+                ...(session.collection.nextAction.url
+                  ? { url: session.collection.nextAction.url }
+                  : {})
+              }
+            : null,
           provider_ref: session.collection.providerRef,
           status: session.collection.status
         }
@@ -578,4 +621,14 @@ function normalizeForHash(value: unknown): unknown {
       accumulator[key] = normalizeForHash((value as Record<string, unknown>)[key]);
       return accumulator;
     }, {});
+}
+
+function getRequestBaseUrl(request: FastifyRequest) {
+  const protocol = request.protocol ?? "http";
+  const host = request.headers.host;
+  if (!host) {
+    return null;
+  }
+
+  return `${protocol}://${host}`;
 }

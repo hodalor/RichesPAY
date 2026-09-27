@@ -1,3 +1,4 @@
+import type { FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import type { Json } from "../db/types";
@@ -6,7 +7,7 @@ import { ProviderCatalog } from "../providers/catalog";
 import { requireIdempotency } from "../public-api/idempotency";
 import { pricingCurrencies } from "../pricing/types";
 import { CollectionService } from "./service";
-import { collectionStatuses, type CollectionRecord } from "./types";
+import { collectionStatuses, refundStatuses, type CollectionRecord, type RefundRecord } from "./types";
 
 const metadataSchema = z.record(z.string(), z.unknown()).default({});
 
@@ -17,6 +18,14 @@ const collectionCustomerSchema = z.object({
 
 const collectionResponseSchema = z.object({
   amount: z.number().int(),
+  card: z
+    .object({
+      brand: z.string().nullable(),
+      expiry_month: z.number().int().nullable(),
+      expiry_year: z.number().int().nullable(),
+      last4: z.string().nullable()
+    })
+    .nullable(),
   channel_id: z.string().nullable(),
   completed_at: z.string().datetime().nullable(),
   created_at: z.string().datetime(),
@@ -33,15 +42,39 @@ const collectionResponseSchema = z.object({
   fee_minor: z.number().int(),
   fx_rate_id: z.string().nullable(),
   id: z.string(),
-  method: z.literal("mobile_money"),
+  method: z.enum(["mobile_money", "card"]),
   net_minor: z.number().int(),
   network: z.string().nullable(),
-  phone: z.string(),
+  next_action: z
+    .object({
+      iframe_url: z.string().url().optional(),
+      type: z.enum(["hosted_fields", "redirect_url"]),
+      url: z.string().url().optional()
+    })
+    .nullable(),
+  phone: z.string().nullable(),
   presentment_amount: z.number().int().nullable(),
   presentment_currency: z.enum(pricingCurrencies).nullable(),
   provider_ref: z.string().nullable(),
   reference: z.string().nullable(),
+  refunded_minor: z.number().int(),
   status: z.enum(collectionStatuses)
+});
+
+const refundResponseSchema = z.object({
+  amount: z.number().int(),
+  channel_id: z.string().nullable(),
+  collection_id: z.string(),
+  completed_at: z.string().datetime().nullable(),
+  created_at: z.string().datetime(),
+  currency: z.enum(pricingCurrencies),
+  failure_code: z.string().nullable(),
+  failure_message: z.string().nullable(),
+  id: z.string(),
+  method: z.enum(["mobile_money", "card"]),
+  phone: z.string().nullable(),
+  provider_ref: z.string().nullable(),
+  status: z.enum(refundStatuses)
 });
 
 export async function registerCollectionRoutes(app: FastifyTypedInstance) {
@@ -60,14 +93,16 @@ export async function registerCollectionRoutes(app: FastifyTypedInstance) {
       schema: {
         body: z.object({
           amount: z.coerce.number().int().positive(),
+          cancel_url: z.string().url().optional(),
           currency: z.enum(pricingCurrencies),
           customer: collectionCustomerSchema,
           description: z.string().min(1).max(500).optional(),
           metadata: metadataSchema.optional(),
-          method: z.literal("mobile_money"),
+          method: z.enum(["mobile_money", "card"]),
           network: z.string().min(1).optional(),
-          phone: z.string().min(4),
-          reference: z.string().min(1).max(128).optional()
+          phone: z.string().min(4).optional(),
+          reference: z.string().min(1).max(128).optional(),
+          return_url: z.string().url().optional()
         }),
         response: {
           201: z.object({
@@ -89,9 +124,13 @@ export async function registerCollectionRoutes(app: FastifyTypedInstance) {
         idempotencyKey: request.idempotencyState?.key ?? null,
         merchantId: request.publicApiKey!.merchantId,
         metadata: (body.metadata ?? {}) as Json,
+        method: body.method,
         mode: request.publicApiKey!.mode,
         network: body.network ?? null,
-        phone: body.phone,
+        phone: body.phone ?? null,
+        ...(body.cancel_url ? { cancelUrl: body.cancel_url } : {}),
+        baseUrl: getRequestBaseUrl(request),
+        ...(body.return_url ? { returnUrl: body.return_url } : {}),
         reference: body.reference ?? null,
         requestId: request.id
       });
@@ -185,11 +224,61 @@ export async function registerCollectionRoutes(app: FastifyTypedInstance) {
       };
     }
   );
+
+  app.post(
+    "/collections/:id/refunds",
+    {
+      preHandler: [requireIdempotency()],
+      schema: {
+        body: z.object({
+          amount: z.coerce.number().int().positive().optional()
+        }),
+        params: z.object({
+          id: z.string().min(1)
+        }),
+        response: {
+          201: z.object({
+            data: refundResponseSchema
+          })
+        }
+      }
+    },
+    async (request, reply) => {
+      const collection = await collectionService.getById(
+        request.publicApiKey!.merchantId,
+        request.publicApiKey!.mode,
+        request.params.id
+      );
+
+      request.assertApiKeyScope(collection.method === "mobile_money" ? "payouts" : "collections");
+
+      const refund = await collectionService.createRefund({
+        amountMinor: request.body.amount === undefined ? null : BigInt(request.body.amount),
+        collectionId: request.params.id,
+        idempotencyKey: request.idempotencyState?.key ?? null,
+        merchantId: request.publicApiKey!.merchantId,
+        mode: request.publicApiKey!.mode,
+        requestId: request.id
+      });
+
+      return reply.status(201).send({
+        data: serializeRefund(refund)
+      });
+    }
+  );
 }
 
 function serializeCollection(collection: CollectionRecord) {
   return {
     amount: Number(collection.amount),
+    card: collection.card
+      ? {
+          brand: collection.card.brand,
+          expiry_month: collection.card.expiryMonth,
+          expiry_year: collection.card.expiryYear,
+          last4: collection.card.last4
+        }
+      : null,
     channel_id: collection.channelId,
     completed_at: collection.completedAt?.toISOString() ?? null,
     created_at: collection.createdAt.toISOString(),
@@ -209,6 +298,15 @@ function serializeCollection(collection: CollectionRecord) {
     method: collection.method,
     net_minor: Number(collection.netMinor),
     network: collection.network,
+    next_action: collection.nextAction
+      ? {
+          ...(collection.nextAction.iframeUrl
+            ? { iframe_url: collection.nextAction.iframeUrl }
+            : {}),
+          type: collection.nextAction.type,
+          ...(collection.nextAction.url ? { url: collection.nextAction.url } : {})
+        }
+      : null,
     phone: collection.phone,
     presentment_amount:
       collection.presentmentAmount === null
@@ -217,6 +315,35 @@ function serializeCollection(collection: CollectionRecord) {
     presentment_currency: collection.presentmentCurrency,
     provider_ref: collection.providerRef,
     reference: collection.reference,
+    refunded_minor: Number(collection.refundedMinor),
     status: collection.status
   };
+}
+
+function serializeRefund(refund: RefundRecord) {
+  return {
+    amount: Number(refund.amount),
+    channel_id: refund.channelId,
+    collection_id: refund.collectionId,
+    completed_at: refund.completedAt?.toISOString() ?? null,
+    created_at: refund.createdAt.toISOString(),
+    currency: refund.currency,
+    failure_code: refund.failureCode,
+    failure_message: refund.failureMessage,
+    id: refund.id,
+    method: refund.method,
+    phone: refund.phone,
+    provider_ref: refund.providerRef,
+    status: refund.status
+  };
+}
+
+function getRequestBaseUrl(request: FastifyRequest) {
+  const protocol = request.protocol ?? "http";
+  const host = request.headers.host;
+  if (!host) {
+    return null;
+  }
+
+  return `${protocol}://${host}`;
 }

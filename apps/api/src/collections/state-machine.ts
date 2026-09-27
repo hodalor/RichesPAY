@@ -84,3 +84,16 @@ export function collectionEventTypeForStatus(status: CollectionStatus): string |
       return null;
   }
 }
+
+export function refundEventTypeForStatus(
+  status: "failed" | "pending" | "processing" | "successful"
+): string | null {
+  switch (status) {
+    case "successful":
+      return "refund.successful";
+    case "failed":
+      return "refund.failed";
+    default:
+      return null;
+  }
+}

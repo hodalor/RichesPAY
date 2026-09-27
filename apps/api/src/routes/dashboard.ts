@@ -14,6 +14,9 @@ import {
 
 import { authenticateSupabaseSession } from "../auth/session";
 import { registerCheckoutDashboardRoutes } from "../checkout";
+import { ComplianceService } from "../compliance";
+import { registerPayoutDashboardRoutes } from "../payouts";
+import { registerTopupDashboardRoutes } from "../topups";
 import { createSupabaseAnonClient } from "../auth/supabase-client";
 import { runWithSystemScope, type ScopedTransaction } from "../db";
 import { dashboardAuthPlugin } from "../plugins/dashboard-auth";
@@ -72,6 +75,10 @@ async function requireSession(
 }
 
 export async function registerDashboardRoutes(app: FastifyTypedInstance) {
+  const complianceService = new ComplianceService({
+    database: app.db
+  });
+
   app.post(
     "/auth/sign-up",
     {
@@ -189,6 +196,13 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
         },
         { audit: false }
       );
+
+      await complianceService.screenMerchantOnboarding({
+        countryCode: body.country_code.toUpperCase(),
+        merchantId: merchant.id,
+        merchantName: body.business_name,
+        mode: "live"
+      });
 
       return reply.status(201).send({
         data: {
@@ -438,6 +452,8 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
   await app.register(async (protectedApp) => {
     await protectedApp.register(dashboardAuthPlugin);
     await registerCheckoutDashboardRoutes(protectedApp);
+    await registerPayoutDashboardRoutes(protectedApp);
+    await registerTopupDashboardRoutes(protectedApp);
 
     protectedApp.get(
       "/session",
@@ -446,6 +462,42 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
           response: {
             200: z.object({
               data: z.object({
+                compliance: z.object({
+                  collections_freeze_category: z.enum([
+                    "regulatory",
+                    "chargeback_risk",
+                    "kyb_review",
+                    "sanctions_screening",
+                    "fraud_review",
+                    "operations",
+                    "other"
+                  ]).nullable(),
+                  collections_freeze_reason: z.string().nullable(),
+                  collections_frozen: z.boolean(),
+                  contact_link: z.string(),
+                  payouts_freeze_category: z.enum([
+                    "regulatory",
+                    "chargeback_risk",
+                    "kyb_review",
+                    "sanctions_screening",
+                    "fraud_review",
+                    "operations",
+                    "other"
+                  ]).nullable(),
+                  payouts_freeze_reason: z.string().nullable(),
+                  payouts_frozen: z.boolean(),
+                  status: z.string(),
+                  suspension_category: z.enum([
+                    "regulatory",
+                    "chargeback_risk",
+                    "kyb_review",
+                    "sanctions_screening",
+                    "fraud_review",
+                    "operations",
+                    "other"
+                  ]).nullable(),
+                  suspension_reason: z.string().nullable()
+                }),
                 email: z.string().nullable(),
                 merchant_id: z.string(),
                 merchant_name: z.string(),
@@ -459,8 +511,26 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
           }
         }
       },
-      async (request) => ({
-        data: {
+      async (request) => {
+        const summary = await complianceService.getMerchantSummary(
+          request.dashboardMembership!.merchantId,
+          request.dashboardMembership!.mode
+        );
+
+        return {
+          data: {
+            compliance: {
+              collections_freeze_category: summary.collectionsFreezeCategory,
+              collections_freeze_reason: summary.collectionsFreezeReason,
+              collections_frozen: summary.collectionsFrozen,
+              contact_link: summary.contactLink,
+              payouts_freeze_category: summary.payoutsFreezeCategory,
+              payouts_freeze_reason: summary.payoutsFreezeReason,
+              payouts_frozen: summary.payoutsFrozen,
+              status: summary.status,
+              suspension_category: summary.suspensionCategory,
+              suspension_reason: summary.suspensionReason
+            },
           email: request.authenticatedSession?.email ?? null,
           merchant_id: request.dashboardMembership!.merchantId,
           merchant_name: request.dashboardMembership!.merchantName,
@@ -470,7 +540,8 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
           settlement_currency: request.dashboardMembership!.settlementCurrency,
           user_id: request.dashboardMembership!.userId
         }
-      })
+        };
+      }
     );
 
     protectedApp.get(

@@ -23,7 +23,7 @@ export type ChannelCapability = "collect" | "payout" | "sms";
 
 export type ChannelHealth = "degraded" | "down" | "healthy";
 
-export type ChannelKind = "card" | "mobile_money" | "sms";
+export type ChannelKind = "bank" | "card" | "mobile_money" | "sms";
 
 export type ChannelStatus = "active" | "disabled" | "maintenance";
 
@@ -32,6 +32,12 @@ export type CheckoutMethod = "card" | "mobile_money";
 export type CheckoutSessionStatus = "completed" | "expired" | "open";
 
 export type CollectionStatus = "expired" | "failed" | "pending" | "processing" | "reversed" | "successful";
+
+export type ComplianceReasonCategory = "chargeback_risk" | "fraud_review" | "kyb_review" | "operations" | "other" | "regulatory" | "sanctions_screening";
+
+export type ComplianceReviewStatus = "dismissed" | "open" | "resolved";
+
+export type EmailDeliveryStatus = "failed" | "pending" | "sent";
 
 export type FeeBearer = "customer" | "merchant";
 
@@ -53,7 +59,7 @@ export type IdempotencyStatus = "completed" | "in_progress";
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
-export type JournalReferenceType = "adjustment" | "collection" | "fee" | "payout" | "reversal" | "settlement" | "sms";
+export type JournalReferenceType = "adjustment" | "collection" | "fee" | "payout" | "reversal" | "settlement" | "sms" | "topup";
 
 export type Json = JsonValue;
 
@@ -73,6 +79,8 @@ export type KybDocumentType = "certificate_of_incorporation" | "director_id" | "
 
 export type KybProfileStatus = "approved" | "pending" | "rejected";
 
+export type KybTier = "tier_0" | "tier_1" | "tier_2" | "tier_3";
+
 export type LedgerAccountType = "fx_clearing" | "merchant_available" | "merchant_payout_hold" | "merchant_pending" | "merchant_reserve" | "platform_fees" | "platform_sms_revenue" | "provider_clearing" | "suspense";
 
 export type MembershipRole = "admin" | "developer" | "finance" | "owner" | "support" | "viewer";
@@ -83,13 +91,21 @@ export type Numeric = ColumnType<string, number | string, number | string>;
 
 export type PaymentLinkAmountMode = "customer_entered" | "fixed";
 
+export type PayoutBatchStatus = "cancelled" | "completed" | "failed" | "on_hold" | "pending_approval" | "processing" | "queued";
+
+export type PayoutStatus = "cancelled" | "failed" | "on_hold" | "pending_approval" | "processing" | "queued" | "reversed" | "successful";
+
 export type PlatformAdminRole = "compliance" | "finance" | "operations" | "super_admin" | "support";
 
 export type PostingDirection = "credit" | "debit";
 
+export type RefundStatus = "failed" | "pending" | "processing" | "successful";
+
 export type RpMode = "live" | "test";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
+
+export type TopupStatus = "expired" | "failed" | "pending" | "successful";
 
 export interface AccountBalances {
   account_id: string;
@@ -153,6 +169,15 @@ export interface AuthUsers {
   id: string;
 }
 
+export interface Banks {
+  active: Generated<boolean>;
+  code: string;
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  name: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface ChannelHealthEvents {
   channel_id: string;
   created_at: Generated<Timestamp>;
@@ -201,6 +226,10 @@ export interface CheckoutSessions {
 
 export interface Collections {
   amount: Int8;
+  card_brand: string | null;
+  card_exp_month: number | null;
+  card_exp_year: number | null;
+  card_last4: string | null;
   channel_id: string | null;
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
@@ -223,13 +252,31 @@ export interface Collections {
   net_minor: Int8;
   network: string | null;
   next_status_check_at: Timestamp | null;
-  phone: string;
+  phone: string | null;
   presentment_amount: Int8 | null;
   presentment_currency: string | null;
   provider_ref: string | null;
+  provider_session: Generated<Json>;
   reference: string | null;
+  reference_type: Generated<string>;
+  refunded_minor: Generated<Int8>;
   status: CollectionStatus;
   status_check_attempts: Generated<number>;
+}
+
+export interface ComplianceReviewFlags {
+  created_at: Generated<Timestamp>;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  payload: Generated<Json>;
+  resource_id: string;
+  resource_type: string;
+  reviewed_at: Timestamp | null;
+  reviewed_by: string | null;
+  rule_code: string;
+  status: Generated<ComplianceReviewStatus>;
+  summary: string;
 }
 
 export interface Countries {
@@ -239,6 +286,19 @@ export interface Countries {
   enabled: Generated<boolean>;
   name: string;
   timezone: string;
+}
+
+export interface EmailOutbox {
+  body: string;
+  created_at: Generated<Timestamp>;
+  failure_message: string | null;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  recipient_email: string;
+  sent_at: Timestamp | null;
+  status: Generated<EmailDeliveryStatus>;
+  subject: string;
 }
 
 export interface EventsOutbox {
@@ -361,6 +421,42 @@ export interface Memberships {
   user_id: string;
 }
 
+export interface MerchantBalanceAlertThresholds {
+  created_at: Generated<Timestamp>;
+  currency: string;
+  is_below_threshold: Generated<boolean>;
+  merchant_id: string;
+  mode: RpMode;
+  threshold_minor: Int8;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface MerchantComplianceProfiles {
+  collections_daily_volume_minor: Int8 | null;
+  collections_freeze_category: ComplianceReasonCategory | null;
+  collections_max_minor: Generated<Int8>;
+  collections_min_minor: Generated<Int8>;
+  collections_monthly_volume_minor: Int8 | null;
+  contact_link: Generated<string>;
+  created_at: Generated<Timestamp>;
+  kyb_tier: Generated<KybTier>;
+  merchant_id: string;
+  mode: RpMode;
+  payouts_daily_volume_minor: Int8 | null;
+  payouts_freeze_category: ComplianceReasonCategory | null;
+  payouts_max_minor: Generated<Int8>;
+  payouts_min_minor: Generated<Int8>;
+  payouts_monthly_volume_minor: Int8 | null;
+  rolling_reserve_bps: Generated<number>;
+  rolling_reserve_days: Generated<number>;
+  screening_payout_threshold_minor: Int8 | null;
+  suspension_category: ComplianceReasonCategory | null;
+  suspension_reason: string | null;
+  updated_at: Generated<Timestamp>;
+  velocity_collections_per_phone: Generated<number>;
+  velocity_window_minutes: Generated<number>;
+}
+
 export interface MerchantFeeOverrides {
   active: Generated<boolean>;
   created_at: Generated<Timestamp>;
@@ -391,6 +487,18 @@ export interface MerchantFreezeHistory {
   reason: string | null;
 }
 
+export interface MerchantRollingReserveHolds {
+  amount: Int8;
+  collection_id: string;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  release_at: Timestamp;
+  released_at: Timestamp | null;
+}
+
 export interface Merchants {
   api_rate_limit_rps: Generated<number>;
   collections_freeze_reason: string | null;
@@ -400,13 +508,16 @@ export interface Merchants {
   id: string;
   legal_name: string;
   mode: RpMode;
+  payout_approval_threshold_minor: Int8 | null;
   payouts_freeze_reason: string | null;
   payouts_frozen: Generated<boolean>;
+  payouts_require_approval: Generated<boolean>;
   settlement_currency: string;
   status: Generated<MerchantStatus>;
   support_email: string | null;
   support_phone: string | null;
   timezone: string;
+  topup_transfer_reference: string | null;
   trading_name: string | null;
   updated_at: Generated<Timestamp>;
   website: string | null;
@@ -435,6 +546,59 @@ export interface PaymentLinks {
   slug: string;
   title: string;
   updated_at: Generated<Timestamp>;
+}
+
+export interface PayoutBatches {
+  approved_by: string | null;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  currency: string;
+  id: string;
+  item_count: number;
+  merchant_id: string;
+  metadata: Generated<Json>;
+  mode: RpMode;
+  reference: string | null;
+  status: PayoutBatchStatus;
+  total_amount: Int8;
+  total_fee_minor: Generated<Int8>;
+  total_hold_minor: Int8;
+  updated_at: Generated<Timestamp>;
+  validation_report: Generated<Json>;
+}
+
+export interface Payouts {
+  account_name: string | null;
+  account_number: string | null;
+  amount: Int8;
+  approved_by: string | null;
+  bank_code: string | null;
+  batch_id: string | null;
+  channel_id: string | null;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  currency: string;
+  failure_code: string | null;
+  failure_message: string | null;
+  fee_minor: Generated<Int8>;
+  id: string;
+  last_status_check_at: Timestamp | null;
+  merchant_id: string;
+  metadata: Generated<Json>;
+  method: FeeMethod;
+  mode: RpMode;
+  narration: string | null;
+  network: string | null;
+  next_status_check_at: Timestamp | null;
+  phone: string | null;
+  provider_ref: string | null;
+  reference: string | null;
+  send_attempts: Generated<number>;
+  status: PayoutStatus;
+  status_check_attempts: Generated<number>;
+  total_hold_minor: Int8;
 }
 
 export interface PlatformAdmins {
@@ -486,6 +650,25 @@ export interface ProviderCallbacks {
   received_at: Generated<Timestamp>;
 }
 
+export interface Refunds {
+  amount: Int8;
+  channel_id: string | null;
+  collection_id: string;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  failure_code: string | null;
+  failure_message: string | null;
+  id: string;
+  merchant_id: string;
+  metadata: Generated<Json>;
+  method: FeeMethod;
+  mode: RpMode;
+  phone: string | null;
+  provider_ref: string | null;
+  status: RefundStatus;
+}
+
 export interface RoutingRules {
   capability: ChannelCapability;
   channel_ids: string[];
@@ -504,6 +687,23 @@ export interface SmsPrices {
   network: string | null;
   price_per_segment_minor: Int8;
   updated_at: Generated<Timestamp>;
+}
+
+export interface Topups {
+  amount: Int8;
+  bank_reference: string | null;
+  completed_at: Timestamp | null;
+  confirmed_by: string | null;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  fee_minor: Generated<Int8>;
+  id: string;
+  merchant_id: string;
+  method: string;
+  mode: RpMode;
+  provider_ref: string | null;
+  source_collection_id: string | null;
+  status: TopupStatus;
 }
 
 export interface TransactionEvents {
@@ -526,11 +726,14 @@ export interface DB {
   api_request_logs: ApiRequestLogs;
   audit_logs: AuditLogs;
   "auth.users": AuthUsers;
+  banks: Banks;
   channel_health_events: ChannelHealthEvents;
   channels: Channels;
   checkout_sessions: CheckoutSessions;
   collections: Collections;
+  compliance_review_flags: ComplianceReviewFlags;
   countries: Countries;
+  email_outbox: EmailOutbox;
   events_outbox: EventsOutbox;
   fee_plans: FeePlans;
   fx_rates: FxRates;
@@ -541,17 +744,24 @@ export interface DB {
   kyb_profiles: KybProfiles;
   ledger_accounts: LedgerAccounts;
   memberships: Memberships;
+  merchant_balance_alert_thresholds: MerchantBalanceAlertThresholds;
+  merchant_compliance_profiles: MerchantComplianceProfiles;
   merchant_fee_overrides: MerchantFeeOverrides;
   merchant_freeze_history: MerchantFreezeHistory;
+  merchant_rolling_reserve_holds: MerchantRollingReserveHolds;
   merchants: Merchants;
   msisdn_prefixes: MsisdnPrefixes;
   payment_links: PaymentLinks;
+  payout_batches: PayoutBatches;
+  payouts: Payouts;
   platform_admins: PlatformAdmins;
   postings: Postings;
   profiles: Profiles;
   provider_api_logs: ProviderApiLogs;
   provider_callbacks: ProviderCallbacks;
+  refunds: Refunds;
   routing_rules: RoutingRules;
   sms_prices: SmsPrices;
+  topups: Topups;
   transaction_events: TransactionEvents;
 }

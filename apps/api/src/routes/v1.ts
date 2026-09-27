@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { registerCollectionRoutes } from "../collections";
 import { registerCheckoutRoutes } from "../checkout";
+import { registerPayoutRoutes } from "../payouts";
 import type { FastifyTypedInstance } from "../types";
 import { publicApiPlugin } from "../plugins/public-api";
 import { FeeService } from "../pricing/fee-service";
@@ -29,6 +30,7 @@ export async function registerV1Routes(app: FastifyTypedInstance) {
   await app.register(async (protectedApp) => {
     await protectedApp.register(publicApiPlugin);
     await registerCollectionRoutes(protectedApp);
+    await registerPayoutRoutes(protectedApp);
 
     protectedApp.get(
       "/fees/quote",

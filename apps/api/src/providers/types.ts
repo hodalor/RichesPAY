@@ -1,7 +1,7 @@
 import type { Json } from "../db/types";
 import type { RpMode } from "../db/types";
 
-export const channelKinds = ["mobile_money", "card", "sms"] as const;
+export const channelKinds = ["mobile_money", "card", "bank", "sms"] as const;
 export const channelCapabilities = ["collect", "payout", "sms"] as const;
 export const channelStatuses = ["active", "disabled", "maintenance"] as const;
 export const channelHealthStates = ["healthy", "degraded", "down"] as const;
@@ -22,9 +22,17 @@ export interface ProviderOperationContext {
 
 export interface ProviderResult {
   failureCode?: string;
+  nextAction?: Json | null;
   outcome: ProviderOutcome;
   providerRef?: string;
   providerStatus?: string;
+  rawRedacted: Json | null;
+}
+
+export interface ScreeningResult {
+  matchReason?: string;
+  outcome: "clear" | "review_required" | "blocked";
+  providerCode: string;
   rawRedacted: Json | null;
 }
 
@@ -73,6 +81,19 @@ export interface CardPaymentSessionRequest {
   metadata?: Json | null;
   reference: string;
   returnUrl?: string;
+  context: ProviderOperationContext;
+}
+
+export interface BankPayoutRequest {
+  accountName?: string;
+  accountNumber: string;
+  amount: number;
+  bankCode: string;
+  callbackUrl?: string;
+  currency: string;
+  metadata?: Json | null;
+  narration?: string;
+  reference: string;
   context: ProviderOperationContext;
 }
 
@@ -130,11 +151,29 @@ export interface CardAcquirer {
   healthCheck(): Promise<ProviderResult>;
 }
 
+export interface BankPayoutProvider {
+  payout(req: BankPayoutRequest): Promise<ProviderResult>;
+  getStatus(ref: string): Promise<ProviderResult>;
+  verifyCallback(input: ProviderCallbackVerificationInput): Promise<boolean> | boolean;
+  parseCallback(rawBody: string): Promise<NormalizedEvent> | NormalizedEvent;
+  healthCheck(): Promise<ProviderResult>;
+}
+
 export interface SmsProvider {
   send(msg: SmsMessageRequest): Promise<ProviderResult>;
   parseDeliveryReport(rawBody: string): Promise<NormalizedEvent> | NormalizedEvent;
   getBalance?(): Promise<ProviderResult>;
   healthCheck(): Promise<ProviderResult>;
+}
+
+export interface ScreeningProvider {
+  screen(input: {
+    merchantId: string;
+    mode: RpMode;
+    referenceId: string;
+    subject: Json;
+    subjectType: "merchant_onboarding" | "payout_beneficiary";
+  }): Promise<ScreeningResult>;
 }
 
 export interface ChannelRecord {
@@ -164,6 +203,7 @@ export interface ChannelRoutingTarget {
   channel: ChannelRecord;
   provider:
     | CardAcquirer
+    | BankPayoutProvider
     | MobileMoneyProvider
     | SmsProvider;
 }

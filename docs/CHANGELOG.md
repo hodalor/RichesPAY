@@ -1,6 +1,14 @@
 # Changelog
 
 ## 2026-09-27
+- Added compliance controls for merchant collections, payouts, and suspension states with audited admin freeze/reactivate endpoints, dashboard read-only banners, merchant freeze history, and outbox events for freeze and unfreeze actions.
+- Added merchant compliance profiles with KYB-tier limits, collection velocity review flags, screening-provider hooks for onboarding and high-value payouts, rolling reserve holds and release tracking, and focused integration coverage for reserve settlement and payout `on_hold` resume behavior.
+- Added merchant balance top-ups with `topups`, merchant transfer references, low-balance alert thresholds, and email/webhook outbox writes, plus ledger-backed credits into `merchant_available` so one balance funds payouts and SMS.
+- Reused the collections and checkout engines internally for mobile-money and card top-ups with hidden `reference_type = 'topup'`, added dashboard/admin top-up endpoints and drawer flows, test-mode instant funds, and integration coverage for top-up-funded SMS charging and payouts.
+- Added the disbursements foundation with `banks`, `payouts`, and `payout_batches` tables, bank-channel support in the provider framework, payout polling/dispatch loops, callback reconciliation for payouts, public payout endpoints, and dashboard approval/template endpoints for maker-checker workflows.
+- Added simulator-backed bank payout behavior, payout hold/complete/release ledger integration, payout outbox events, and public API integration coverage for insufficient balance, frozen payouts, hold release on cancel, and the no-double-send timeout path.
+- Added card collections through the generic `CardAcquirer` flow with hosted-fields or redirect next actions, presentment-versus-settlement FX storage, checkout card handling that never posts PAN or CVV to `apps/api`, card and refund events, and a short PCI scope note in `docs/pci.md`.
+- Added refund creation on `/v1/collections/:id/refunds`, simulator-backed card callback coverage, masked card-result storage, mobile-money refund permission enforcement, and checkout/public API tests for the card flow.
 - Added hosted checkout sessions and payment links with RLS-backed `checkout_sessions` and `payment_links` tables, public checkout endpoints, dashboard CRUD, and integration coverage for expiry, single-use links, and the simulator-backed end-to-end payment flow.
 - Replaced the checkout app placeholder with the hosted checkout and payment-link experience, including mobile money network selection, live polling status screens, success and failure return states, and an embeddable `richespay.js` iframe launcher.
 

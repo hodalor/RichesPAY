@@ -73,6 +73,18 @@ export const dashboardAuthPlugin = fp(async (app) => {
 
     enforceDashboardMfa(session, membership);
 
+    if (
+      membership.merchantStatus === "suspended" &&
+      request.method !== "GET" &&
+      request.method !== "HEAD"
+    ) {
+      throw new ApiRouteError({
+        code: "merchant_suspended",
+        message: "This merchant is suspended. Dashboard writes are disabled.",
+        statusCode: 403
+      });
+    }
+
     request.authenticatedSession = session;
     request.dashboardMembership = membership;
     request.dashboardPermissions = getDashboardPermissions(membership.role);

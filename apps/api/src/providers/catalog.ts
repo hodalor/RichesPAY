@@ -4,6 +4,7 @@ import ipaddr from "ipaddr.js";
 
 import type { AppDatabase } from "../db";
 import type {
+  BankPayoutProvider,
   CardAcquirer,
   ChannelRecord,
   MobileMoneyProvider,
@@ -11,24 +12,32 @@ import type {
   ProviderCallbackVerificationInput,
   ProviderHttpTransport,
   ProviderResult,
+  ScreeningProvider,
   SmsMessageRequest,
   SmsProvider
 } from "./types";
 import { AirtelMoneyProvider } from "./airtel_money";
 import { AtMoneyProvider } from "./at_money";
+import { GenericBankPayoutProvider } from "./bank_generic";
+import { GenericCardAcquirer } from "./card_generic";
 import { CredentialEncryptionService } from "./crypto";
 import { HttpProviderClient } from "./http-client";
 import { MtnMomoProvider } from "./mtn_momo";
 import { TelecelCashProvider } from "./telecel_cash";
 import {
+  SimulatorBankPayoutProvider,
   SimulatorCardAcquirer,
   SimulatorMobileMoneyProvider,
   SimulatorSmsProvider
 } from "./simulator";
+import { NoopScreeningProvider } from "./screening";
 import { ZamtelMoneyProvider } from "./zamtel_money";
 
 export class ProviderCatalog {
-  #adapterCache = new Map<string, CardAcquirer | MobileMoneyProvider | SmsProvider>();
+  #adapterCache = new Map<
+    string,
+    BankPayoutProvider | CardAcquirer | MobileMoneyProvider | SmsProvider
+  >();
   #encryption: CredentialEncryptionService | null;
   #transport: ProviderHttpTransport | null;
 
@@ -47,10 +56,26 @@ export class ProviderCatalog {
 
   resolveCardAcquirer(channel: ChannelRecord): CardAcquirer {
     if (channel.providerCode === "simulator") {
-      return new SimulatorCardAcquirer();
+      return new SimulatorCardAcquirer(channel.config);
+    }
+
+    if (channel.providerCode === "card_generic") {
+      return new GenericCardAcquirer(channel.config);
     }
 
     return new PassiveCardAcquirer(channel.providerCode, channel.config);
+  }
+
+  resolveBankPayoutProvider(channel: ChannelRecord): BankPayoutProvider {
+    if (channel.providerCode === "simulator") {
+      return new SimulatorBankPayoutProvider();
+    }
+
+    if (channel.providerCode === "bank_generic") {
+      return new GenericBankPayoutProvider(channel.config);
+    }
+
+    return new PassiveBankPayoutProvider(channel.providerCode, channel.config);
   }
 
   resolveMobileMoneyProvider(channel: ChannelRecord): MobileMoneyProvider {
@@ -100,6 +125,10 @@ export class ProviderCatalog {
     }
 
     return new PassiveSmsProvider(channel.providerCode, channel.config);
+  }
+
+  resolveScreeningProvider(): ScreeningProvider {
+    return new NoopScreeningProvider();
   }
 
   #decryptCredentials(payload: string): unknown {
@@ -155,6 +184,43 @@ class PassiveCardAcquirer implements CardAcquirer {
 
   async refund(ref: string): Promise<ProviderResult> {
     return accepted(this.#providerCode, `refund:${ref}`, this.#config);
+  }
+
+  verifyCallback(input: ProviderCallbackVerificationInput): boolean {
+    return verifyPassiveCallback(input, this.#config);
+  }
+}
+
+class PassiveBankPayoutProvider implements BankPayoutProvider {
+  #providerCode: string;
+  #config: unknown;
+
+  constructor(providerCode: string, config: unknown) {
+    this.#providerCode = providerCode;
+    this.#config = config;
+  }
+
+  async payout(req: {
+    reference: string;
+  }): Promise<ProviderResult> {
+    return accepted(this.#providerCode, `queued:${req.reference}`, this.#config);
+  }
+
+  async getStatus(ref: string): Promise<ProviderResult> {
+    return unknown(this.#providerCode, ref, this.#config);
+  }
+
+  async healthCheck(): Promise<ProviderResult> {
+    return {
+      outcome: "unknown",
+      providerRef: this.#providerCode,
+      providerStatus: "not_configured",
+      rawRedacted: null
+    };
+  }
+
+  async parseCallback(rawBody: string): Promise<NormalizedEvent> {
+    return parsePassiveCallback(rawBody);
   }
 
   verifyCallback(input: ProviderCallbackVerificationInput): boolean {

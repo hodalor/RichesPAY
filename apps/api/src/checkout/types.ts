@@ -56,9 +56,21 @@ export interface CheckoutSessionView {
   allowedMethods: CheckoutMethod[];
   cancelUrl: string | null;
   collection: {
+    card: {
+      brand: string | null;
+      expiryMonth: number | null;
+      expiryYear: number | null;
+      last4: string | null;
+    } | null;
     failureCode: string | null;
     failureMessage: string | null;
     id: string;
+    method: "mobile_money" | "card";
+    nextAction: {
+      iframeUrl?: string;
+      type: "hosted_fields" | "redirect_url";
+      url?: string;
+    } | null;
     providerRef: string | null;
     status: string;
   } | null;

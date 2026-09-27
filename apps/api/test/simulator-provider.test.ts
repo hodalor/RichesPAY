@@ -2,7 +2,11 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { SimulatorMobileMoneyProvider } from "../src/providers";
+import {
+  SimulatorBankPayoutProvider,
+  SimulatorCardAcquirer,
+  SimulatorMobileMoneyProvider
+} from "../src/providers";
 
 describe("simulator mobile money provider", () => {
   const provider = new SimulatorMobileMoneyProvider();
@@ -144,5 +148,189 @@ describe("simulator mobile money provider", () => {
       providerRef: "sim_collect_callback_success_3s_col_default",
       toStatus: "succeeded"
     });
+  });
+});
+
+describe("simulator card acquirer", () => {
+  const provider = new SimulatorCardAcquirer({
+    checkout_origin: "http://127.0.0.1:5175"
+  });
+
+  it("returns hosted fields next actions for test card entry", async () => {
+    const session = await provider.createPaymentSession({
+      amount: 5000,
+      callbackUrl: "http://127.0.0.1:3000/callbacks/chn_simulator_card_test",
+      context: {
+        mode: "test",
+        requestId: "req_card_0001"
+      },
+      currency: "GHS",
+      reference: "col_card_0001",
+      returnUrl: "http://127.0.0.1:5175/session/cs_card_0001"
+    });
+
+    expect(session.outcome).toBe("accepted");
+    expect(session.providerStatus).toBe("pending");
+    expect(session.nextAction).toMatchObject({
+      iframe_url: expect.stringContaining("/simulator/card-fields?"),
+      type: "hosted_fields"
+    });
+    expect(session.rawRedacted).toMatchObject({
+      simulator: {
+        accepted_cards: [
+          "4000000000000001",
+          "4000000000000002",
+          "4000000000000003"
+        ],
+        hosted_fields: true
+      }
+    });
+  });
+
+  it("maps declined and successful card statuses", async () => {
+    await expect(provider.getStatus("sim_card_col_card_0002_declined")).resolves.toMatchObject(
+      {
+        failureCode: "provider_error",
+        outcome: "failed",
+        providerStatus: "declined"
+      }
+    );
+
+    await expect(provider.getStatus("sim_card_col_card_0001")).resolves.toMatchObject({
+      outcome: "succeeded",
+      providerStatus: "succeeded"
+    });
+  });
+
+  it("parses and verifies simulator card callbacks with masked card data", async () => {
+    const callbackBody = JSON.stringify({
+      event_type: "collection.updated",
+      payment_instrument: {
+        brand: "visa",
+        expiry_month: 3,
+        expiry_year: 2028,
+        last4: "0003"
+      },
+      provider_ref: "sim_card_col_card_0003",
+      resource_id: "col_card_0003",
+      resource_type: "collection",
+      to_status: "succeeded"
+    });
+    const signature = createHmac(
+      "sha256",
+      "richespay_simulator_callback_secret"
+    )
+      .update(callbackBody)
+      .digest("hex");
+
+    expect(
+      provider.verifyCallback({
+        headers: {
+          "x-richespay-simulator-signature": signature
+        },
+        ip: "127.0.0.1",
+        rawBody: callbackBody
+      })
+    ).toBe(true);
+
+    await expect(provider.parseCallback(callbackBody)).resolves.toMatchObject({
+      providerRef: "sim_card_col_card_0003",
+      rawRedacted: {
+        payment_instrument: {
+          brand: "visa",
+          expiry_month: 3,
+          expiry_year: 2028,
+          last4: "0003"
+        }
+      },
+      resourceId: "col_card_0003",
+      toStatus: "succeeded"
+    });
+  });
+});
+
+describe("simulator bank payout provider", () => {
+  const provider = new SimulatorBankPayoutProvider();
+
+  it("uses the documented bank account endings", async () => {
+    const success = await provider.payout({
+      accountNumber: "1234560001",
+      amount: 5000,
+      bankCode: "GCB",
+      context: {
+        mode: "test",
+        requestId: "req_bank_0001"
+      },
+      currency: "GHS",
+      reference: "pay_bank_0001"
+    });
+    expect(success.outcome).toBe("accepted");
+
+    const insufficientFunds = await provider.payout({
+      accountNumber: "1234560002",
+      amount: 5000,
+      bankCode: "GCB",
+      context: {
+        mode: "test",
+        requestId: "req_bank_0002"
+      },
+      currency: "GHS",
+      reference: "pay_bank_0002"
+    });
+    expect(insufficientFunds.outcome).toBe("failed");
+    expect(insufficientFunds.failureCode).toBe("insufficient_funds");
+
+    const pendingNoCallback = await provider.payout({
+      accountNumber: "1234560003",
+      amount: 5000,
+      bankCode: "GCB",
+      context: {
+        mode: "test",
+        requestId: "req_bank_0003"
+      },
+      currency: "GHS",
+      reference: "pay_bank_0003"
+    });
+    expect(pendingNoCallback.outcome).toBe("accepted");
+    expect(pendingNoCallback.rawRedacted).toMatchObject({
+      no_callback: true
+    });
+    await expect(provider.getStatus(String(pendingNoCallback.providerRef))).resolves.toMatchObject(
+      {
+        outcome: "succeeded"
+      }
+    );
+
+    const accountRejected = await provider.payout({
+      accountNumber: "1234560004",
+      amount: 5000,
+      bankCode: "GCB",
+      context: {
+        mode: "test",
+        requestId: "req_bank_0004"
+      },
+      currency: "GHS",
+      reference: "pay_bank_0004"
+    });
+    expect(accountRejected.outcome).toBe("failed");
+    expect(accountRejected.providerStatus).toBe("account_rejected");
+
+    const timeoutThenStatusSuccess = await provider.payout({
+      accountNumber: "1234560005",
+      amount: 5000,
+      bankCode: "GCB",
+      context: {
+        mode: "test",
+        requestId: "req_bank_0005"
+      },
+      currency: "GHS",
+      reference: "pay_bank_0005"
+    });
+    expect(timeoutThenStatusSuccess.outcome).toBe("unknown");
+    await expect(provider.getStatus(String(timeoutThenStatusSuccess.providerRef))).resolves.toMatchObject(
+      {
+        outcome: "succeeded"
+      }
+    );
   });
 });

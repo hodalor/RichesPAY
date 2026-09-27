@@ -9,6 +9,7 @@ import { runWithSystemScope } from "../db";
 import type { AppDatabase } from "../db";
 import { getClientIp } from "../auth/admin-access";
 import { ApiRouteError } from "../lib/api-error";
+import { PayoutService } from "../payouts/service";
 import { redactJsonValue } from "../lib/redaction";
 import { ProviderCatalog } from "./catalog";
 import { createProviderCallbacksQueue } from "./queue";
@@ -19,6 +20,7 @@ export class ProviderCallbackService {
   #collectionService: CollectionService;
   #database: AppDatabase;
   #logger: FastifyBaseLogger | undefined;
+  #payoutService: PayoutService;
   #queue: ReturnType<typeof createProviderCallbacksQueue> | undefined;
 
   constructor(input: {
@@ -33,6 +35,9 @@ export class ProviderCallbackService {
     });
     this.#database = input.database;
     this.#logger = input.logger;
+    this.#payoutService = new PayoutService({
+      database: input.database
+    });
     this.#queue = input.redisUrl
       ? createProviderCallbacksQueue(input.redisUrl)
       : undefined;
@@ -179,6 +184,18 @@ export class ProviderCallbackService {
             collectionId: parsed.resourceId,
             ...(parsed.providerRef ? { providerRef: parsed.providerRef } : {}),
             providerStatus: parsed.toStatus,
+            rawPayload: parsed.rawRedacted,
+            ...(parsed.reason ? { reason: parsed.reason } : {})
+          });
+        } else if (
+          parsed.resourceType === "payout" &&
+          parsed.resourceId &&
+          parsed.toStatus
+        ) {
+          await this.#payoutService.applyProviderCallback({
+            payoutId: parsed.resourceId,
+            ...(parsed.providerRef ? { providerRef: parsed.providerRef } : {}),
+            providerStatus: parsed.toStatus,
             ...(parsed.reason ? { reason: parsed.reason } : {})
           });
         } else if (
@@ -271,12 +288,16 @@ export class ProviderCallbackService {
 
   async #parseCallback(channel: ChannelRecord, rawBody: string) {
     switch (channel.kind) {
+      case "bank":
+        return this.#catalog.resolveBankPayoutProvider(channel).parseCallback(rawBody);
       case "card":
         return this.#catalog.resolveCardAcquirer(channel).parseCallback(rawBody);
       case "mobile_money":
         return this.#catalog.resolveMobileMoneyProvider(channel).parseCallback(rawBody);
       case "sms":
         return this.#catalog.resolveSmsProvider(channel).parseDeliveryReport(rawBody);
+      default:
+        throw new Error(`Unsupported callback channel kind: ${channel.kind satisfies never}`);
     }
   }
 
@@ -289,12 +310,16 @@ export class ProviderCallbackService {
     }
   ) {
     switch (channel.kind) {
+      case "bank":
+        return this.#catalog.resolveBankPayoutProvider(channel).verifyCallback(input);
       case "card":
         return this.#catalog.resolveCardAcquirer(channel).verifyCallback(input);
       case "mobile_money":
         return this.#catalog.resolveMobileMoneyProvider(channel).verifyCallback(input);
       case "sms":
         return verifyGenericCallback(channel.config, input);
+      default:
+        throw new Error(`Unsupported callback channel kind: ${channel.kind satisfies never}`);
     }
   }
 }

@@ -73,6 +73,8 @@ export function startProviderHealthCheckLoop(input: {
 
 async function resolveHealthCheck(catalog: ProviderCatalog, channel: ChannelRecord) {
   switch (channel.kind) {
+    case "bank":
+      return catalog.resolveBankPayoutProvider(channel).healthCheck();
     case "card":
       return catalog.resolveCardAcquirer(channel).healthCheck();
     case "mobile_money":
