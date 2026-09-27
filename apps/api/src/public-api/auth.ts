@@ -26,13 +26,15 @@ export interface PublicApiKeyContext {
 export async function authenticateApiKey(
   database: AppDatabase,
   input: {
+    allowedKinds?: readonly ApiKeyKind[];
     authorizationHeader: string | undefined;
     apiKeyPepper: string;
     clientIp: string;
   }
 ): Promise<PublicApiKeyContext> {
   const parsed = parseApiKey(input.authorizationHeader);
-  if (!parsed || parsed.kind !== "secret") {
+  const allowedKinds = input.allowedKinds ?? ["secret"];
+  if (!parsed || !allowedKinds.includes(parsed.kind)) {
     throw authenticationFailed();
   }
 
@@ -66,7 +68,7 @@ export async function authenticateApiKey(
         ])
         .where("api_key.prefix", "=", getApiKeyPrefix(parsed.value))
         .where("api_key.mode", "=", parsed.mode)
-        .where("api_key.kind", "=", "secret")
+        .where("api_key.kind", "=", parsed.kind)
         .execute(),
     { audit: false }
   );

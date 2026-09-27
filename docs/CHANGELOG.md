@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-27
+- Added hosted checkout sessions and payment links with RLS-backed `checkout_sessions` and `payment_links` tables, public checkout endpoints, dashboard CRUD, and integration coverage for expiry, single-use links, and the simulator-backed end-to-end payment flow.
+- Replaced the checkout app placeholder with the hosted checkout and payment-link experience, including mobile money network selection, live polling status screens, success and failure return states, and an embeddable `richespay.js` iframe launcher.
+
 ## 2026-09-26
 - Scaffolded the initial RichesPay monorepo with API, dashboard, admin, checkout, shared packages, UI package wiring, local Redis, and Supabase project structure.
 - Built the RichesPay design system in `packages/ui`, exported the shared Tailwind preset and theme variables, and added the dashboard `/ui-kit` sample list page.

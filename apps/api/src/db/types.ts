@@ -27,6 +27,10 @@ export type ChannelKind = "card" | "mobile_money" | "sms";
 
 export type ChannelStatus = "active" | "disabled" | "maintenance";
 
+export type CheckoutMethod = "card" | "mobile_money";
+
+export type CheckoutSessionStatus = "completed" | "expired" | "open";
+
 export type CollectionStatus = "expired" | "failed" | "pending" | "processing" | "reversed" | "successful";
 
 export type FeeBearer = "customer" | "merchant";
@@ -76,6 +80,8 @@ export type MembershipRole = "admin" | "developer" | "finance" | "owner" | "supp
 export type MerchantStatus = "active" | "closed" | "pending_kyb" | "suspended";
 
 export type Numeric = ColumnType<string, number | string, number | string>;
+
+export type PaymentLinkAmountMode = "customer_entered" | "fixed";
 
 export type PlatformAdminRole = "compliance" | "finance" | "operations" | "super_admin" | "support";
 
@@ -172,6 +178,25 @@ export interface Channels {
   provider_code: string;
   status: Generated<ChannelStatus>;
   updated_at: Generated<Timestamp>;
+}
+
+export interface CheckoutSessions {
+  allowed_methods: ArrayType<CheckoutMethod>;
+  amount: Int8;
+  cancel_url: string | null;
+  collection_id: string | null;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  customer: Generated<Json>;
+  description: string | null;
+  expires_at: Timestamp;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  payment_link_id: string | null;
+  reference: string | null;
+  status: Generated<CheckoutSessionStatus>;
+  success_url: string | null;
 }
 
 export interface Collections {
@@ -395,6 +420,23 @@ export interface MsisdnPrefixes {
   updated_at: Generated<Timestamp>;
 }
 
+export interface PaymentLinks {
+  active: Generated<boolean>;
+  amount: Int8 | null;
+  amount_mode: PaymentLinkAmountMode;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  description: string | null;
+  id: string;
+  merchant_id: string;
+  min_amount: Int8 | null;
+  mode: RpMode;
+  reusable: Generated<boolean>;
+  slug: string;
+  title: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface PlatformAdmins {
   active: Generated<boolean>;
   created_at: Generated<Timestamp>;
@@ -486,6 +528,7 @@ export interface DB {
   "auth.users": AuthUsers;
   channel_health_events: ChannelHealthEvents;
   channels: Channels;
+  checkout_sessions: CheckoutSessions;
   collections: Collections;
   countries: Countries;
   events_outbox: EventsOutbox;
@@ -502,6 +545,7 @@ export interface DB {
   merchant_freeze_history: MerchantFreezeHistory;
   merchants: Merchants;
   msisdn_prefixes: MsisdnPrefixes;
+  payment_links: PaymentLinks;
   platform_admins: PlatformAdmins;
   postings: Postings;
   profiles: Profiles;

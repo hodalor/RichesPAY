@@ -2,6 +2,7 @@ import { sql } from "kysely";
 import { z } from "zod";
 
 import { registerCollectionRoutes } from "../collections";
+import { registerCheckoutRoutes } from "../checkout";
 import type { FastifyTypedInstance } from "../types";
 import { publicApiPlugin } from "../plugins/public-api";
 import { FeeService } from "../pricing/fee-service";
@@ -154,4 +155,6 @@ export async function registerV1Routes(app: FastifyTypedInstance) {
       }
     );
   });
+
+  await registerCheckoutRoutes(app);
 }

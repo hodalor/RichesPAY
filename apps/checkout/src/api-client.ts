@@ -29,36 +29,59 @@ function isApiErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
   );
 }
 
+export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
+  bearerToken?: string | null;
+  body?: BodyInit | Record<string, unknown> | null;
+  idempotencyKey?: string | null;
+}
+
 export async function apiRequest<T>(
   path: string,
-  init: RequestInit = {}
+  init: ApiRequestOptions = {}
 ): Promise<T> {
+  const {
+    bearerToken,
+    body,
+    idempotencyKey,
+    ...requestInit
+  } = init;
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
 
-  if (!headers.has("Content-Type") && init.body) {
+  const token = bearerToken ?? env.bearerToken;
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  if (idempotencyKey) {
+    headers.set("Idempotency-Key", idempotencyKey);
+  }
+
+  const requestBody =
+    body && typeof body === "object" && !(body instanceof FormData)
+      ? JSON.stringify(body)
+      : body;
+
+  if (!headers.has("Content-Type") && requestBody) {
     headers.set("Content-Type", "application/json");
   }
 
-  if (env.bearerToken) {
-    headers.set("Authorization", `Bearer ${env.bearerToken}`);
-  }
-
   const response = await fetch(new URL(path, env.apiBaseUrl), {
-    ...init,
+    ...requestInit,
+    ...(requestBody !== undefined ? { body: requestBody } : {}),
     headers
   });
 
   const bodyText = await response.text();
-  const body = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
+  const parsedBody = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
 
-  if (isApiErrorEnvelope(body)) {
+  if (isApiErrorEnvelope(parsedBody)) {
     throw new ApiError(
-      body.error.message,
-      body.error.code,
+      parsedBody.error.message,
+      parsedBody.error.code,
       response.status,
-      body.error.field,
-      body.error.request_id
+      parsedBody.error.field,
+      parsedBody.error.request_id
     );
   }
 
@@ -71,12 +94,12 @@ export async function apiRequest<T>(
   }
 
   if (
-    typeof body !== "object" ||
-    body === null ||
-    !("data" in body)
+    typeof parsedBody !== "object" ||
+    parsedBody === null ||
+    !("data" in parsedBody)
   ) {
     throw new ApiError("Invalid API response envelope", "internal_error", 500);
   }
 
-  return (body as ApiSuccessEnvelope<T>).data;
+  return ((parsedBody as unknown) as ApiSuccessEnvelope<T>).data;
 }

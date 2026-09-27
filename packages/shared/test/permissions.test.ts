@@ -24,6 +24,13 @@ describe("permissions matrix", () => {
     expect(hasPermission("finance", "api_keys.manage")).toBe(false);
   });
 
+  it("allows owner, admin, and developer roles to manage payment links", () => {
+    expect(hasPermission("owner", "payment_links.manage")).toBe(true);
+    expect(hasPermission("admin", "payment_links.manage")).toBe(true);
+    expect(hasPermission("developer", "payment_links.manage")).toBe(true);
+    expect(hasPermission("viewer", "payment_links.manage")).toBe(false);
+  });
+
   it("throws a forbidden error when a role lacks permission", () => {
     expect(() => requirePermission("team.manage", "viewer")).toThrow(
       /Permission denied/

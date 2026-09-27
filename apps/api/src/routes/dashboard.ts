@@ -13,6 +13,7 @@ import {
 } from "@richespay/shared";
 
 import { authenticateSupabaseSession } from "../auth/session";
+import { registerCheckoutDashboardRoutes } from "../checkout";
 import { createSupabaseAnonClient } from "../auth/supabase-client";
 import { runWithSystemScope, type ScopedTransaction } from "../db";
 import { dashboardAuthPlugin } from "../plugins/dashboard-auth";
@@ -436,6 +437,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
 
   await app.register(async (protectedApp) => {
     await protectedApp.register(dashboardAuthPlugin);
+    await registerCheckoutDashboardRoutes(protectedApp);
 
     protectedApp.get(
       "/session",

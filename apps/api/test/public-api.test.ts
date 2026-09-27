@@ -25,6 +25,7 @@ describe("public v1 api", () => {
   let devPostgres: DevPostgresHandle;
   let env: AppEnv;
   let builtApp: Awaited<ReturnType<typeof buildApp>>;
+  let checkoutPublicKey = "";
   let liveKey = "";
   let revokedKey = "";
   let testKey = "";
@@ -56,6 +57,7 @@ describe("public v1 api", () => {
     builtApp = await buildApp(env);
     await builtApp.redis.disconnect();
 
+    checkoutPublicKey = createPlainApiKey("test", "public");
     liveKey = createPlainApiKey("live", "secret");
     revokedKey = createPlainApiKey("live", "secret");
     testKey = createPlainApiKey("test", "secret");
@@ -103,6 +105,20 @@ describe("public v1 api", () => {
         await trx
           .insertInto("api_keys")
           .values([
+            {
+              created_by: "10000000-0000-0000-0000-000000000001",
+              id: "key_test_checkout_public",
+              ip_allowlist: null,
+              key_hash: hashApiKey(checkoutPublicKey, env.API_KEY_PEPPER),
+              kind: "public",
+              last4: getApiKeyLast4(checkoutPublicKey),
+              merchant_id: "mer_public_test",
+              mode: "test",
+              name: "Checkout public key",
+              prefix: getApiKeyPrefix(checkoutPublicKey),
+              revoked_at: null,
+              scopes: ["read", "collections"]
+            },
             {
               created_by: "10000000-0000-0000-0000-000000000001",
               id: "key_live_active",
@@ -455,6 +471,206 @@ describe("public v1 api", () => {
     expect(response.json()).toMatchObject({
       error: {
         code: "unsupported_currency"
+      }
+    });
+  });
+
+  it("expires checkout sessions after their 30 minute window", async () => {
+    const createResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`
+      },
+      method: "POST",
+      payload: {
+        allowed_methods: ["mobile_money"],
+        amount: 5000,
+        currency: "GHS",
+        description: "Hosted test payment",
+        success_url: "http://127.0.0.1:5173/success"
+      },
+      url: "/v1/checkout/sessions"
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json().data as {
+      id: string;
+      url: string;
+    };
+    expect(created.id.startsWith("cs_")).toBe(true);
+    expect(created.url).toContain(`/session/${created.id}?key=`);
+
+    await runWithSystemScope(
+      builtApp.db,
+      "force checkout session expiry",
+      async (trx) => {
+        await trx
+          .updateTable("checkout_sessions")
+          .set({
+            expires_at: new Date(Date.now() - 1000)
+          })
+          .where("id", "=", created.id)
+          .execute();
+      },
+      { audit: false }
+    );
+
+    const getResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`
+      },
+      method: "GET",
+      url: `/v1/checkout/sessions/${created.id}`
+    });
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      data: {
+        id: created.id,
+        status: "expired"
+      }
+    });
+  });
+
+  it("rejects reuse of a non-reusable payment link", async () => {
+    await runWithSystemScope(
+      builtApp.db,
+      "seed non reusable payment link",
+      async (trx) => {
+        await trx
+          .insertInto("payment_links")
+          .values({
+            active: true,
+            amount: 6500n,
+            amount_mode: "fixed",
+            currency: "GHS",
+            description: "One-off payment link",
+            id: "lnk_checkout_single_use",
+            merchant_id: "mer_public_test",
+            min_amount: null,
+            mode: "test",
+            reusable: false,
+            slug: "single-use-link",
+            title: "Single use link"
+          })
+          .execute();
+      },
+      { audit: false }
+    );
+
+    const firstResponse = await builtApp.app.inject({
+      method: "POST",
+      payload: {},
+      url: "/v1/checkout/payment-links/single-use-link/sessions"
+    });
+
+    const secondResponse = await builtApp.app.inject({
+      method: "POST",
+      payload: {},
+      url: "/v1/checkout/payment-links/single-use-link/sessions"
+    });
+
+    expect(firstResponse.statusCode).toBe(201);
+    expect(secondResponse.statusCode).toBe(400);
+    expect(secondResponse.json()).toMatchObject({
+      error: {
+        code: "validation_error",
+        field: "slug"
+      }
+    });
+  });
+
+  it("runs the hosted checkout simulator flow from session creation to completion", async () => {
+    const createResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`
+      },
+      method: "POST",
+      payload: {
+        allowed_methods: ["mobile_money", "card"],
+        amount: 5000,
+        currency: "GHS",
+        customer: {
+          email: "checkout-customer@example.com",
+          name: "Checkout Customer"
+        },
+        description: "Simulator checkout"
+      },
+      url: "/v1/checkout/sessions"
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json().data as {
+      id: string;
+    };
+
+    const payResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`,
+        "idempotency-key": "idem-checkout-simulator"
+      },
+      method: "POST",
+      payload: {
+        network: "mtn",
+        phone: "+233241230003"
+      },
+      url: `/v1/checkout/sessions/${created.id}/pay`
+    });
+
+    expect(payResponse.statusCode).toBe(200);
+    expect(payResponse.json()).toMatchObject({
+      data: {
+        id: created.id,
+        collection: {
+          status: "processing"
+        },
+        status: "open"
+      }
+    });
+
+    const collectionId = payResponse.json().data.collection.id as string;
+
+    await runWithSystemScope(
+      builtApp.db,
+      "backdate checkout collection polling schedule",
+      async (trx) => {
+        await trx
+          .updateTable("collections")
+          .set({
+            next_status_check_at: new Date(Date.now() - 1000)
+          })
+          .where("id", "=", collectionId)
+          .execute();
+      },
+      { audit: false }
+    );
+
+    const pollingService = new CollectionStatusPollingService({
+      database: builtApp.db,
+      providerCatalog: new ProviderCatalog({
+        database: builtApp.db,
+        encryptionKey: env.ENCRYPTION_KEY
+      })
+    });
+
+    await pollingService.pollDueCollections();
+
+    const getResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`
+      },
+      method: "GET",
+      url: `/v1/checkout/sessions/${created.id}`
+    });
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      data: {
+        id: created.id,
+        collection: {
+          id: collectionId,
+          status: "successful"
+        },
+        status: "completed"
       }
     });
   });

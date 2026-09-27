@@ -30,6 +30,7 @@ export const merchantPermissions = [
   "merchant.switch",
   "payouts.create",
   "api_keys.manage",
+  "payment_links.manage",
   "team.manage"
 ] as const;
 
@@ -42,6 +43,7 @@ export const merchantPermissionMatrix: Record<
   "api_keys.manage": ["owner", "admin", "developer"],
   "members.read": merchantRoles,
   "merchant.switch": merchantRoles,
+  "payment_links.manage": ["owner", "admin", "developer"],
   "payouts.create": ["owner", "admin", "finance"],
   "team.manage": ["owner", "admin"]
 };
