@@ -359,6 +359,33 @@ describe("public v1 api", () => {
     expect(outboxEvent?.type).toBe("collection.failed");
   });
 
+  it("defaults collection method to mobile money when a phone number is provided", async () => {
+    const response = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-collection-inferred-method"
+      },
+      method: "POST",
+      payload: {
+        amount: 5000,
+        currency: "GHS",
+        phone: "+233241230002",
+        reference: "merchant-ref-inferred-method"
+      },
+      url: "/v1/collections"
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      data: {
+        method: "mobile_money",
+        network: "mtn",
+        phone: "+233241230002",
+        reference: "merchant-ref-inferred-method"
+      }
+    });
+  });
+
   it("creates a processing collection and settles it through the polling job", async () => {
     const response = await builtApp.app.inject({
       headers: {
@@ -571,6 +598,30 @@ describe("public v1 api", () => {
         method: "mobile_money",
         phone: "+233241230001",
         reference: "merchant-payout-insufficient"
+      },
+      url: "/v1/payouts"
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: "insufficient_funds"
+      }
+    });
+  });
+
+  it("defaults payout method to mobile money when a phone number is provided", async () => {
+    const response = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${testKey}`,
+        "idempotency-key": "idem-payout-inferred-method"
+      },
+      method: "POST",
+      payload: {
+        amount: 100000,
+        currency: "GHS",
+        phone: "+233241230001",
+        reference: "merchant-payout-inferred-method"
       },
       url: "/v1/payouts"
     });
@@ -968,6 +1019,49 @@ describe("public v1 api", () => {
           status: "successful"
         },
         status: "completed"
+      }
+    });
+  });
+
+  it("defaults checkout pay method to mobile money when a phone number is provided", async () => {
+    const createResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`
+      },
+      method: "POST",
+      payload: {
+        allowed_methods: ["mobile_money", "card"],
+        amount: 5000,
+        currency: "GHS",
+        description: "Inferred checkout method"
+      },
+      url: "/v1/checkout/sessions"
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json().data as { id: string };
+
+    const payResponse = await builtApp.app.inject({
+      headers: {
+        authorization: `Bearer ${checkoutPublicKey}`,
+        "idempotency-key": "idem-checkout-inferred-method"
+      },
+      method: "POST",
+      payload: {
+        phone: "+233241230003"
+      },
+      url: `/v1/checkout/sessions/${created.id}/pay`
+    });
+
+    expect(payResponse.statusCode).toBe(200);
+    expect(payResponse.json()).toMatchObject({
+      data: {
+        collection: {
+          method: "mobile_money",
+          network: "mtn",
+          phone: "+233241230003"
+        },
+        id: created.id
       }
     });
   });

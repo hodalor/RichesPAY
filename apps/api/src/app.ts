@@ -28,6 +28,7 @@ import { registerAdminRoutes } from "./routes/admin";
 import { registerCallbackRoutes } from "./routes/callbacks";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerV1Routes } from "./routes/v1";
+import { auditRouteAccess } from "./security/route-access";
 
 function getValidationField(error: unknown): string | undefined {
   if (
@@ -63,6 +64,7 @@ export async function buildApp(env: AppEnv) {
   registerDatabase(db);
 
   const app = Fastify({
+    bodyLimit: 2 * 1024 * 1024,
     genReqId: (request) => {
       const requestId = request.headers["x-request-id"];
       return typeof requestId === "string" && requestId.trim() !== ""
@@ -79,10 +81,18 @@ export async function buildApp(env: AppEnv) {
           "authorization",
           "body.password",
           "body.card",
+          "body.card_number",
           "body.cvv",
           "body.pin",
+          "body.phone",
+          "body.to",
           "body.otp",
-          "body.secret"
+          "body.secret",
+          "body.token",
+          "body.access_token",
+          "body.refresh_token",
+          "body.customer.email",
+          "body.customer.phone"
         ]
       }
     },
@@ -96,7 +106,47 @@ export async function buildApp(env: AppEnv) {
   app.decorate("appEnv", env);
   app.decorate("db", db);
   app.decorate("dbPool", dbPool);
+  app.decorate("routeAccessAudit", []);
   app.decorate("redis", redis);
+
+  app.addHook("onRoute", (routeOptions) => {
+    const entries = auditRouteAccess(routeOptions);
+
+    for (const entry of entries) {
+      app.routeAccessAudit.push(entry);
+    }
+
+    if (entries.length === 1 && entries[0]?.access) {
+      routeOptions.config = {
+        ...(routeOptions.config ?? {}),
+        richespayAccess: entries[0].access
+      };
+    }
+  });
+
+  app.addHook("preValidation", async (request) => {
+    if (!["DELETE", "PATCH", "POST", "PUT"].includes(request.method)) {
+      return;
+    }
+
+    const routeUrl = request.routeOptions.url ?? request.url;
+    if (routeUrl.startsWith("/callbacks/")) {
+      return;
+    }
+
+    const contentType = request.headers["content-type"];
+    if (
+      typeof contentType !== "string" ||
+      !contentType.toLowerCase().startsWith("application/json")
+    ) {
+      throw new ApiRouteError({
+        code: "unsupported_media_type",
+        field: "content-type",
+        message: getErrorDefinition("unsupported_media_type").message,
+        statusCode: getErrorDefinition("unsupported_media_type").status
+      });
+    }
+  });
 
   app.setErrorHandler(async (error, request, reply) => {
     const requestId = request.id;
@@ -147,9 +197,24 @@ export async function buildApp(env: AppEnv) {
     const explicitCode =
       extractErrorCode(error) ||
       (isErrorCode(errorMessage) ? errorMessage : null);
+    const fastifyContentTypeCode =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      typeof error.code === "string"
+        ? error.code
+        : null;
+    const derivedFastifyCode =
+      fastifyContentTypeCode === "FST_ERR_CTP_BODY_TOO_LARGE"
+        ? "payload_too_large"
+        : fastifyContentTypeCode === "FST_ERR_CTP_INVALID_MEDIA_TYPE"
+          ? "unsupported_media_type"
+          : null;
     const resolvedStatusCode = explicitCode
       ? getErrorDefinition(explicitCode).status
-      : statusCode;
+      : derivedFastifyCode
+        ? getErrorDefinition(derivedFastifyCode).status
+        : statusCode;
 
     if (resolvedStatusCode >= 500) {
       request.log.error({ err: error }, "Unhandled request error");
@@ -157,6 +222,8 @@ export async function buildApp(env: AppEnv) {
 
     const code = explicitCode
       ? explicitCode
+      : derivedFastifyCode
+        ? derivedFastifyCode
       : resolvedStatusCode === 401
         ? "unauthorized"
         : resolvedStatusCode === 403
@@ -185,7 +252,24 @@ export async function buildApp(env: AppEnv) {
   });
 
   await app.register(requestIdPlugin);
-  await app.register(helmet);
+  await app.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        baseUri: ["'none'"],
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        formAction: ["'none'"]
+      }
+    },
+    frameguard: {
+      action: "deny"
+    },
+    hsts: {
+      includeSubDomains: true,
+      maxAge: 63072000,
+      preload: true
+    }
+  });
   await app.register(cors, {
     origin: [env.DASHBOARD_ORIGIN, env.ADMIN_ORIGIN, env.CHECKOUT_ORIGIN]
   });

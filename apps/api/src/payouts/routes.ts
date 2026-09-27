@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { Json } from "../db/types";
 import { requireIdempotency } from "../public-api/idempotency";
+import { inferPayoutMethod } from "../public-api/request-shape";
 import { pricingCurrencies } from "../pricing/types";
 import { ProviderCatalog } from "../providers/catalog";
 import type { FastifyTypedInstance } from "../types";
@@ -94,7 +95,7 @@ const payoutItemBodySchema = z.object({
   amount: z.coerce.number().int().positive(),
   bank_code: z.string().min(1).max(32).optional(),
   metadata: metadataSchema.optional(),
-  method: z.enum(payoutMethods),
+  method: z.enum(payoutMethods).optional(),
   narration: z.string().min(1).max(255).optional(),
   network: z.string().min(1).max(64).optional(),
   phone: z.string().min(4).max(32).optional(),
@@ -165,6 +166,12 @@ export async function registerPayoutRoutes(app: FastifyTypedInstance) {
     async (request, reply) => {
       request.assertApiKeyScope("payouts");
       const body = request.body;
+      const method = inferPayoutMethod({
+        account_number: body.account_number,
+        bank_code: body.bank_code,
+        method: body.method,
+        phone: body.phone
+      });
 
       const payout = await payoutService.create({
         accountName: body.account_name ?? null,
@@ -176,7 +183,7 @@ export async function registerPayoutRoutes(app: FastifyTypedInstance) {
         idempotencyKey: request.idempotencyState?.key ?? null,
         merchantId: request.publicApiKey!.merchantId,
         metadata: (body.metadata ?? {}) as Json,
-        method: body.method,
+        method,
         mode: request.publicApiKey!.mode,
         narration: body.narration ?? null,
         network: body.network ?? null,
@@ -341,18 +348,27 @@ export async function registerPayoutRoutes(app: FastifyTypedInstance) {
       const result = await payoutService.createBatch({
         createdBy: request.publicApiKey!.apiKeyId,
         currency: body.currency,
-        items: body.items.map((item) => ({
-          ...(item.account_name ? { accountName: item.account_name } : {}),
-          ...(item.account_number ? { accountNumber: item.account_number } : {}),
-          amount: item.amount,
-          ...(item.bank_code ? { bankCode: item.bank_code } : {}),
-          ...(item.metadata ? { metadata: item.metadata as Json } : {}),
-          method: item.method,
-          ...(item.narration ? { narration: item.narration } : {}),
-          ...(item.network ? { network: item.network } : {}),
-          ...(item.phone ? { phone: item.phone } : {}),
-          ...(item.reference ? { reference: item.reference } : {})
-        })),
+        items: body.items.map((item) => {
+          const method = inferPayoutMethod({
+            account_number: item.account_number,
+            bank_code: item.bank_code,
+            method: item.method,
+            phone: item.phone
+          });
+
+          return {
+            ...(item.account_name ? { accountName: item.account_name } : {}),
+            ...(item.account_number ? { accountNumber: item.account_number } : {}),
+            amount: item.amount,
+            ...(item.bank_code ? { bankCode: item.bank_code } : {}),
+            ...(item.metadata ? { metadata: item.metadata as Json } : {}),
+            method,
+            ...(item.narration ? { narration: item.narration } : {}),
+            ...(item.network ? { network: item.network } : {}),
+            ...(item.phone ? { phone: item.phone } : {}),
+            ...(item.reference ? { reference: item.reference } : {})
+          };
+        }),
         merchantId: request.publicApiKey!.merchantId,
         metadata: (body.metadata ?? {}) as Json,
         mode: request.publicApiKey!.mode,

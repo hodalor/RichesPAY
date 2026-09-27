@@ -10,6 +10,7 @@ import type { Json, RpMode } from "../db/types";
 import { ApiRouteError } from "../lib/api-error";
 import { requireIdempotency } from "../public-api/idempotency";
 import { parseApiKey } from "../public-api/api-keys";
+import { inferCheckoutMethod } from "../public-api/request-shape";
 import { publicCheckoutPlugin } from "../plugins/public-checkout";
 import { pricingCurrencies } from "../pricing/types";
 import type { FastifyTypedInstance } from "../types";
@@ -60,7 +61,7 @@ const hostedCheckoutSessionCreateBodySchema = z.object({
 });
 
 const checkoutPayBodySchema = z.object({
-  method: z.enum(checkoutMethods),
+  method: z.enum(checkoutMethods).optional(),
   network: z.string().min(1).optional(),
   phone: z.string().min(4).optional()
 });
@@ -84,6 +85,7 @@ const checkoutSessionResponseSchema = z.object({
       failure_message: z.string().nullable(),
       id: z.string(),
       method: z.enum(checkoutMethods),
+      network: z.string().nullable(),
       next_action: z
         .object({
           iframe_url: z.string().url().optional(),
@@ -91,6 +93,7 @@ const checkoutSessionResponseSchema = z.object({
           url: z.string().url().optional()
         })
         .nullable(),
+      phone: z.string().nullable(),
       provider_ref: z.string().nullable(),
       status: z.string()
     })
@@ -233,6 +236,10 @@ export async function registerCheckoutRoutes(app: FastifyTypedInstance) {
     async (request, reply) => {
       const body = checkoutPayBodySchema.parse(request.body);
       const params = paymentLinkSessionParamsSchema.parse(request.params);
+      const method = inferCheckoutMethod({
+        method: body.method,
+        phone: body.phone
+      });
       const session = await checkoutService.getSessionForPaymentLink(params.slug, params.id);
       const idempotencyState = await beginPaymentLinkIdempotency(app, {
         body,
@@ -249,7 +256,7 @@ export async function registerCheckoutRoutes(app: FastifyTypedInstance) {
       const updatedSession = await checkoutService.submitSessionPaymentForPaymentLink({
         baseUrl: getRequestBaseUrl(request),
         idempotencyKey: idempotencyState.key,
-        method: body.method,
+        method,
         network: body.network ?? null,
         phone: body.phone ?? null,
         requestId: request.id,
@@ -367,11 +374,15 @@ export async function registerCheckoutRoutes(app: FastifyTypedInstance) {
         const body = checkoutPayBodySchema.parse(request.body);
         const params = checkoutSessionParamsSchema.parse(request.params);
         request.assertApiKeyScope("collections");
+        const method = inferCheckoutMethod({
+          method: body.method,
+          phone: body.phone
+        });
 
         const session = await checkoutService.submitSessionPaymentForMerchant({
           baseUrl: getRequestBaseUrl(request),
           idempotencyKey: request.idempotencyState?.key ?? null,
-          method: body.method,
+          method,
           merchantId: request.publicApiKey!.merchantId,
           mode: request.publicApiKey!.mode,
           network: body.network ?? null,
@@ -409,6 +420,7 @@ function serializeCheckoutSession(session: CheckoutSessionView) {
           failure_message: session.collection.failureMessage,
           id: session.collection.id,
           method: session.collection.method,
+          network: session.collection.network,
           next_action: session.collection.nextAction
             ? {
                 ...(session.collection.nextAction.iframeUrl
@@ -420,6 +432,7 @@ function serializeCheckoutSession(session: CheckoutSessionView) {
                   : {})
               }
             : null,
+          phone: session.collection.phone,
           provider_ref: session.collection.providerRef,
           status: session.collection.status
         }

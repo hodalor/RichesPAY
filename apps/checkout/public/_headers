@@ -1,0 +1,5 @@
+/*
+  Content-Security-Policy: default-src 'self'; base-uri 'none'; connect-src 'self' https://api.richespay.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://coresg-normal.trae.ai; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; frame-src 'self'; frame-ancestors 'self' https://*.richespay.com; form-action 'self'; upgrade-insecure-requests
+  Referrer-Policy: no-referrer
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff

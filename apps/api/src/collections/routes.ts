@@ -5,6 +5,7 @@ import type { Json } from "../db/types";
 import type { FastifyTypedInstance } from "../types";
 import { ProviderCatalog } from "../providers/catalog";
 import { requireIdempotency } from "../public-api/idempotency";
+import { inferCollectionMethod } from "../public-api/request-shape";
 import { pricingCurrencies } from "../pricing/types";
 import { CollectionService } from "./service";
 import { collectionStatuses, refundStatuses, type CollectionRecord, type RefundRecord } from "./types";
@@ -98,7 +99,7 @@ export async function registerCollectionRoutes(app: FastifyTypedInstance) {
           customer: collectionCustomerSchema,
           description: z.string().min(1).max(500).optional(),
           metadata: metadataSchema.optional(),
-          method: z.enum(["mobile_money", "card"]),
+          method: z.enum(["mobile_money", "card"]).optional(),
           network: z.string().min(1).optional(),
           phone: z.string().min(4).optional(),
           reference: z.string().min(1).max(128).optional(),
@@ -115,6 +116,10 @@ export async function registerCollectionRoutes(app: FastifyTypedInstance) {
       request.assertApiKeyScope("collections");
 
       const body = request.body;
+      const method = inferCollectionMethod({
+        method: body.method,
+        phone: body.phone
+      });
       const collection = await collectionService.create({
         amountMinor: BigInt(body.amount),
         currency: body.currency,
@@ -124,7 +129,7 @@ export async function registerCollectionRoutes(app: FastifyTypedInstance) {
         idempotencyKey: request.idempotencyState?.key ?? null,
         merchantId: request.publicApiKey!.merchantId,
         metadata: (body.metadata ?? {}) as Json,
-        method: body.method,
+        method,
         mode: request.publicApiKey!.mode,
         network: body.network ?? null,
         phone: body.phone ?? null,

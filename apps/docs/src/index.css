@@ -1,0 +1,34 @@
+@import url("https://rsms.me/inter/inter.css");
+@import "@richespay/ui/styles.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: rgb(var(--rp-text-primary));
+  font-family: "Inter", system-ui, sans-serif;
+  font-synthesis: none;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+html {
+  background: #f8fafc;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at top, rgba(249, 115, 22, 0.08), transparent 30%),
+    #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+}

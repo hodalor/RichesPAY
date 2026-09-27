@@ -13,6 +13,10 @@ import type { DashboardMembershipContext } from "./auth/dashboard-access";
 import type { PlatformAdminContext } from "./auth/admin-access";
 import type { AuthenticatedSession } from "./auth/session";
 import type { AppEnv } from "./env";
+import type {
+  RichesPayRegisteredRouteAccess,
+  RichesPayRouteAccess
+} from "./security/route-access";
 import type { AppDatabase, ScopedTransaction } from "./db";
 import type { IdempotencyState } from "./public-api/idempotency";
 import type { PublicApiKeyContext } from "./public-api/auth";
@@ -32,7 +36,12 @@ declare module "fastify" {
     appEnv: AppEnv;
     db: AppDatabase;
     dbPool: Pool;
+    routeAccessAudit: RichesPayRegisteredRouteAccess[];
     redis: Redis;
+  }
+
+  interface FastifyContextConfig {
+    richespayAccess?: RichesPayRouteAccess;
   }
 
   interface FastifyRequest {

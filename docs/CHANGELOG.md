@@ -1,6 +1,9 @@
 # Changelog
 
 ## 2026-09-27
+- Simplified the public `/v1` API by allowing collections, payouts, and checkout payments to infer `method=mobile_money` from `phone`, seeding MSISDN network prefixes so `network` can be omitted and auto-detected, and exposing the inferred `phone` and `network` back on checkout session payment responses.
+- Added a new white `apps/docs` site with RichesPay guides, four-language runnable examples, an embedded `/v1/openapi.json` API reference, the requested quick-start curl example, and a public changelog page.
+- Added the `@richespay/node` SDK with typed collections, payouts, payout batches, SMS, OTP, checkout session helpers, webhook signature verification, and automatic `Idempotency-Key` generation for POST requests.
 - Added the RichesPay Admin back-office on `/admin/v1` with a charcoal staff shell, platform overview metrics, merchant search and detail tabs, KYB review, compliance flags, channel and routing operations, global transaction search, reconciliation views, sender ID review, pricing and FX visibility, admin user listing, and audit log filtering with reason capture on sensitive actions.
 - Added the merchant dashboard Developers workspace with API key management across test and live modes, webhook endpoint setup and delivery replay, API request log inspection, outbox event viewing, and a quick-start cURL card tied to the public docs.
 - Added merchant dashboard summary rollups on `/dashboard/v1/summary`, product-aware grouped navigation, compliance banners, mobile stacked-row tables, richer payout and payment-link drawers, and a full Sender IDs workspace wired to the existing dashboard APIs.

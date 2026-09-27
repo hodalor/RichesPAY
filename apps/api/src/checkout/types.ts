@@ -66,11 +66,13 @@ export interface CheckoutSessionView {
     failureMessage: string | null;
     id: string;
     method: "mobile_money" | "card";
+    network: string | null;
     nextAction: {
       iframeUrl?: string;
       type: "hosted_fields" | "redirect_url";
       url?: string;
     } | null;
+    phone: string | null;
     providerRef: string | null;
     status: string;
   } | null;

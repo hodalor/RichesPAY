@@ -523,7 +523,9 @@ export class CheckoutService {
             failureMessage: collection.failure_message,
             id: collection.id,
             method: parseCollectionMethod(collection.method),
+            network: collection.network,
             nextAction: parseCollectionNextAction(collection.provider_session),
+            phone: collection.phone,
             providerRef: collection.provider_ref,
             status: collection.status
           }
@@ -644,6 +646,8 @@ export class CheckoutService {
         "failure_message",
         "id",
         "method",
+        "network",
+        "phone",
         "provider_session",
         "provider_ref",
         "status"

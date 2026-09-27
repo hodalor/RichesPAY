@@ -68,6 +68,10 @@ export const ERROR_CATALOG = {
     message: "The API key does not have permission to perform this action.",
     status: 403
   },
+  payload_too_large: {
+    message: "The request body is larger than the allowed limit.",
+    status: 413
+  },
   product_not_enabled: {
     message: "This product is not enabled for the merchant.",
     status: 403
@@ -99,6 +103,10 @@ export const ERROR_CATALOG = {
   unauthorized: {
     message: "You must authenticate to access this resource.",
     status: 401
+  },
+  unsupported_media_type: {
+    message: "Content-Type must be application/json.",
+    status: 415
   },
   unsupported_currency: {
     message: "This currency is not supported for the requested operation.",

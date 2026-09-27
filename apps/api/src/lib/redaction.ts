@@ -2,18 +2,32 @@ import type { Json, JsonArray, JsonObject, JsonValue } from "../db/types";
 
 const REDACTED = "[REDACTED]";
 const emailLikeKeys = new Set(["email", "support_email"]);
-const phoneLikeKeys = new Set(["phone", "support_phone", "msisdn"]);
+const phoneLikeKeys = new Set([
+  "msisdn",
+  "phone",
+  "phone_number",
+  "recipient",
+  "support_phone",
+  "to"
+]);
 const secretLikeKeys = new Set([
+  "access_token",
+  "api_key",
   "authorization",
-  "password",
   "card",
   "card_number",
+  "client_secret",
+  "code",
   "cvv",
-  "pin",
+  "encryption_key",
+  "key_hash",
   "otp",
+  "password",
+  "pin",
+  "refresh_token",
   "secret",
-  "api_key",
-  "key_hash"
+  "token",
+  "webhook_secret"
 ]);
 
 export function redactJsonValue(value: unknown): Json | null {
@@ -64,19 +78,40 @@ function redactPrimitive(
   }
 
   const normalizedKey = parentKey?.toLowerCase();
-  if (normalizedKey && secretLikeKeys.has(normalizedKey)) {
+  if (normalizedKey && isSecretLikeKey(normalizedKey)) {
     return REDACTED;
   }
 
-  if (normalizedKey && emailLikeKeys.has(normalizedKey)) {
+  if (normalizedKey && isEmailLikeKey(normalizedKey)) {
     return maskEmail(value);
   }
 
-  if (normalizedKey && phoneLikeKeys.has(normalizedKey)) {
+  if (normalizedKey && isPhoneLikeKey(normalizedKey)) {
     return maskPhone(value);
   }
 
   return value;
+}
+
+function isEmailLikeKey(key: string) {
+  return emailLikeKeys.has(key) || key.endsWith("_email");
+}
+
+function isPhoneLikeKey(key: string) {
+  return (
+    phoneLikeKeys.has(key) ||
+    key.endsWith("_phone") ||
+    key.endsWith("_msisdn")
+  );
+}
+
+function isSecretLikeKey(key: string) {
+  return (
+    secretLikeKeys.has(key) ||
+    key.endsWith("_secret") ||
+    key.endsWith("_token") ||
+    key.endsWith("_password")
+  );
 }
 
 function maskEmail(email: string): string {
