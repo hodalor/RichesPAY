@@ -5,7 +5,7 @@ import { newId } from "@richespay/shared";
 import { runAdminSystemWrite } from "../auth/admin-access";
 import type { FastifyTypedInstance } from "../types";
 import { DatabasePricingRepository } from "./repository";
-import { feeBearers, feeMethods, feePlanKinds, fxRateSources } from "./types";
+import { feeBearers, feeMethods, feePlanKinds, fxRateSources, pricingCurrencies } from "./types";
 
 const feePlanResponseSchema = z.object({
   active: z.boolean(),
@@ -43,10 +43,10 @@ const smsPriceResponseSchema = z.object({
 
 const createFxRateBodySchema = z.object({
   active: z.boolean().default(true),
-  base: z.enum(["GHS", "ZMW", "USD"]),
+  base: z.enum(pricingCurrencies),
   captured_at: z.string().datetime(),
   markup_bps: z.number().int().min(0).default(0),
-  quote: z.enum(["GHS", "ZMW", "USD"]),
+  quote: z.enum(pricingCurrencies),
   rate: z.string().regex(/^\d+(\.\d+)?$/),
   reason: z.string().min(1)
 }).refine((value) => value.base !== value.quote, {

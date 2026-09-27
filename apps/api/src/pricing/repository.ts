@@ -6,14 +6,15 @@ import {
   type AppDatabase,
   type ScopedTransaction
 } from "../db";
-import type {
-  FeeMethod,
-  FeePlanKind,
-  FeePlanRecord,
-  FxRateRecord,
-  MerchantFeeOverrideRecord,
-  PricingMerchantContext,
-  SmsPriceRecord
+import {
+  parseCurrencyCode,
+  type FeeMethod,
+  type FeePlanKind,
+  type FeePlanRecord,
+  type FxRateRecord,
+  type MerchantFeeOverrideRecord,
+  type PricingMerchantContext,
+  type SmsPriceRecord
 } from "./types";
 
 export interface PricingRepository {
@@ -243,7 +244,7 @@ export class DatabasePricingRepository implements PricingRepository {
 function mapFeePlan(row: {
   active: boolean;
   country_code: string;
-  currency: CurrencyCode;
+  currency: string;
   fee_bearer: FeePlanRecord["feeBearer"];
   fixed_minor: string;
   id: string;
@@ -258,7 +259,7 @@ function mapFeePlan(row: {
   return {
     active: row.active,
     countryCode: row.country_code,
-    currency: row.currency,
+    currency: parseCurrencyCode(row.currency),
     feeBearer: row.fee_bearer,
     fixedMinor: BigInt(row.fixed_minor),
     id: row.id,
@@ -274,7 +275,7 @@ function mapFeePlan(row: {
 
 function mapMerchantFeeOverride(row: {
   active: boolean;
-  currency: CurrencyCode;
+  currency: string;
   fee_bearer: MerchantFeeOverrideRecord["feeBearer"];
   fixed_minor: string;
   id: string;
@@ -290,7 +291,7 @@ function mapMerchantFeeOverride(row: {
 }): MerchantFeeOverrideRecord {
   return {
     active: row.active,
-    currency: row.currency,
+    currency: parseCurrencyCode(row.currency),
     feeBearer: row.fee_bearer,
     fixedMinor: BigInt(row.fixed_minor),
     id: row.id,
@@ -308,13 +309,13 @@ function mapMerchantFeeOverride(row: {
 
 function mapSmsPrice(row: {
   country_code: string;
-  currency: CurrencyCode;
+  currency: string;
   network: string | null;
   price_per_segment_minor: string;
 }): SmsPriceRecord {
   return {
     countryCode: row.country_code,
-    currency: row.currency,
+    currency: parseCurrencyCode(row.currency),
     network: row.network,
     pricePerSegmentMinor: BigInt(row.price_per_segment_minor)
   };
@@ -322,21 +323,21 @@ function mapSmsPrice(row: {
 
 function mapFxRate(row: {
   active: boolean;
-  base: CurrencyCode;
+  base: string;
   captured_at: Date;
   id: string;
   markup_bps: number;
-  quote: CurrencyCode;
+  quote: string;
   rate: string;
   source: FxRateRecord["source"];
 }): FxRateRecord {
   return {
     active: row.active,
-    base: row.base,
+    base: parseCurrencyCode(row.base),
     capturedAt: row.captured_at,
     id: row.id,
     markupBps: row.markup_bps,
-    quote: row.quote,
+    quote: parseCurrencyCode(row.quote),
     rate: row.rate,
     source: row.source
   };

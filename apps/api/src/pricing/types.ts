@@ -1,4 +1,4 @@
-import type { CurrencyCode } from "@richespay/shared";
+import { CURRENCIES, type CurrencyCode } from "@richespay/shared";
 
 import type { RpMode } from "../db";
 
@@ -6,6 +6,7 @@ export const feePlanKinds = ["collection", "payout", "sms"] as const;
 export const feeMethods = ["mobile_money", "card", "bank"] as const;
 export const feeBearers = ["merchant", "customer"] as const;
 export const fxRateSources = ["manual", "feed"] as const;
+export const pricingCurrencies = ["GHS", "ZMW", "USD"] as const;
 
 export type FeePlanKind = (typeof feePlanKinds)[number];
 export type FeeMethod = (typeof feeMethods)[number];
@@ -79,4 +80,12 @@ export interface FeeQuote {
 export interface FxConversionQuote {
   amountMinor: bigint;
   fxRateId: string;
+}
+
+export function parseCurrencyCode(value: string): CurrencyCode {
+  if (value in CURRENCIES) {
+    return value as CurrencyCode;
+  }
+
+  throw new Error(`Unsupported currency: ${value}`);
 }

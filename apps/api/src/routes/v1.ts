@@ -5,7 +5,7 @@ import type { FastifyTypedInstance } from "../types";
 import { publicApiPlugin } from "../plugins/public-api";
 import { FeeService } from "../pricing/fee-service";
 import { DatabasePricingRepository } from "../pricing/repository";
-import { feeMethods, feePlanKinds } from "../pricing/types";
+import { feeMethods, feePlanKinds, parseCurrencyCode, pricingCurrencies } from "../pricing/types";
 
 export async function registerV1Routes(app: FastifyTypedInstance) {
   const pricingRepository = new DatabasePricingRepository(app.db);
@@ -33,7 +33,7 @@ export async function registerV1Routes(app: FastifyTypedInstance) {
         schema: {
           querystring: z.object({
             amount: z.coerce.number().int().positive(),
-            currency: z.enum(["GHS", "ZMW", "USD"]),
+            currency: z.enum(pricingCurrencies),
             kind: z.enum(feePlanKinds),
             method: z.enum(feeMethods),
             network: z.string().min(1).optional()
@@ -41,7 +41,7 @@ export async function registerV1Routes(app: FastifyTypedInstance) {
           response: {
             200: z.object({
               data: z.object({
-                currency: z.enum(["GHS", "ZMW", "USD"]),
+                currency: z.enum(pricingCurrencies),
                 customer_pays_minor: z.number().int(),
                 fee_minor: z.number().int(),
                 merchant_receives_minor: z.number().int()
@@ -55,14 +55,14 @@ export async function registerV1Routes(app: FastifyTypedInstance) {
 
         const query = z.object({
           amount: z.coerce.number().int().positive(),
-          currency: z.enum(["GHS", "ZMW", "USD"]),
+          currency: z.enum(pricingCurrencies),
           kind: z.enum(feePlanKinds),
           method: z.enum(feeMethods),
           network: z.string().min(1).optional()
         }).parse(request.query);
 
         const quote = await request.withPublicApiScope(async (trx) => {
-          const merchant = await trx
+          const merchantRow = await trx
             .selectFrom("merchants")
             .select([
               "country_code as countryCode",
@@ -72,6 +72,11 @@ export async function registerV1Routes(app: FastifyTypedInstance) {
             ])
             .where("id", "=", request.publicApiKey!.merchantId)
             .executeTakeFirstOrThrow();
+
+          const merchant = {
+            ...merchantRow,
+            settlementCurrency: parseCurrencyCode(merchantRow.settlementCurrency)
+          };
 
           return feeService.quote(
             merchant,

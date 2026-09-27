@@ -27,9 +27,17 @@ export type ChannelKind = "card" | "mobile_money" | "sms";
 
 export type ChannelStatus = "active" | "disabled" | "maintenance";
 
+export type FeeBearer = "customer" | "merchant";
+
+export type FeeMethod = "bank" | "card" | "mobile_money";
+
+export type FeePlanKind = "collection" | "payout" | "sms";
+
 export type FreezeAction = "freeze" | "unfreeze";
 
 export type FreezeType = "collections" | "payouts";
+
+export type FxRateSource = "feed" | "manual";
 
 export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
@@ -64,6 +72,8 @@ export type LedgerAccountType = "fx_clearing" | "merchant_available" | "merchant
 export type MembershipRole = "admin" | "developer" | "finance" | "owner" | "support" | "viewer";
 
 export type MerchantStatus = "active" | "closed" | "pending_kyb" | "suspended";
+
+export type Numeric = ColumnType<string, number | string, number | string>;
 
 export type PlatformAdminRole = "compliance" | "finance" | "operations" | "super_admin" | "support";
 
@@ -171,6 +181,37 @@ export interface Countries {
   timezone: string;
 }
 
+export interface FeePlans {
+  active: Generated<boolean>;
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  fee_bearer: FeeBearer;
+  fixed_minor: Generated<Int8>;
+  id: string;
+  kind: FeePlanKind;
+  max_minor: Int8 | null;
+  method: FeeMethod;
+  min_minor: Generated<Int8>;
+  name: string;
+  network: string | null;
+  percent_bps: Generated<number>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface FxRates {
+  active: Generated<boolean>;
+  base: string;
+  captured_at: Timestamp;
+  created_at: Generated<Timestamp>;
+  id: string;
+  markup_bps: Generated<number>;
+  quote: string;
+  rate: Numeric;
+  source: FxRateSource;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface IdempotencyKeys {
   created_at: Generated<Timestamp>;
   key: string;
@@ -249,6 +290,25 @@ export interface Memberships {
   mode: RpMode;
   role: MembershipRole;
   user_id: string;
+}
+
+export interface MerchantFeeOverrides {
+  active: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  fee_bearer: FeeBearer;
+  fixed_minor: Generated<Int8>;
+  id: string;
+  kind: FeePlanKind;
+  max_minor: Int8 | null;
+  merchant_id: string;
+  method: FeeMethod;
+  min_minor: Generated<Int8>;
+  mode: RpMode;
+  name: string;
+  network: string | null;
+  percent_bps: Generated<number>;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface MerchantFreezeHistory {
@@ -351,6 +411,15 @@ export interface RoutingRules {
   updated_at: Generated<Timestamp>;
 }
 
+export interface SmsPrices {
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  network: string | null;
+  price_per_segment_minor: Int8;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface TransactionEvents {
   created_at: Generated<Timestamp>;
   from_status: string | null;
@@ -374,6 +443,8 @@ export interface DB {
   channel_health_events: ChannelHealthEvents;
   channels: Channels;
   countries: Countries;
+  fee_plans: FeePlans;
+  fx_rates: FxRates;
   idempotency_keys: IdempotencyKeys;
   invitations: Invitations;
   journal_entries: JournalEntries;
@@ -381,6 +452,7 @@ export interface DB {
   kyb_profiles: KybProfiles;
   ledger_accounts: LedgerAccounts;
   memberships: Memberships;
+  merchant_fee_overrides: MerchantFeeOverrides;
   merchant_freeze_history: MerchantFreezeHistory;
   merchants: Merchants;
   msisdn_prefixes: MsisdnPrefixes;
@@ -390,5 +462,6 @@ export interface DB {
   provider_api_logs: ProviderApiLogs;
   provider_callbacks: ProviderCallbacks;
   routing_rules: RoutingRules;
+  sms_prices: SmsPrices;
   transaction_events: TransactionEvents;
 }
