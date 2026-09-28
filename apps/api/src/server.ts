@@ -5,6 +5,8 @@ import { sql } from "kysely";
 import { buildApp } from "./app";
 import { loadEnv } from "./env";
 import { startOperationalMonitor } from "./observability/monitor";
+import { startCollectionStatusPollingLoop } from "./collections";
+import { ProviderCatalog } from "./providers/catalog";
 import { startProviderBackgroundServices } from "./providers/background-services";
 
 async function main() {
@@ -41,9 +43,21 @@ async function main() {
           redis
         });
 
+  const collectionPolling =
+    env.APP_ENV === "test" || providerServices
+      ? null
+      : startCollectionStatusPollingLoop({
+          database: db,
+          logger: app.log,
+          providerCatalog: new ProviderCatalog({
+            database: db,
+            encryptionKey: env.ENCRYPTION_KEY
+          })
+        });
+
   if (!providerServices && env.APP_ENV !== "test") {
     app.log.warn(
-      "Redis is unavailable. Background jobs are paused and rate limits stay in memory."
+      "Redis is unavailable. Queue workers are paused. Test collections still settle through in-process simulator callbacks and status polling."
     );
   }
 
@@ -59,6 +73,7 @@ async function main() {
     await Promise.allSettled([
       app.close(),
       providerServices?.stop(),
+      collectionPolling?.stop(),
       monitor?.stop(),
       redis.quit(),
       db.destroy()

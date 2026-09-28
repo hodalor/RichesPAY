@@ -44,7 +44,11 @@ export async function resolveDashboardMembership(
       async (trx) =>
         trx
           .selectFrom("memberships as membership")
-          .innerJoin("merchants as merchant", "merchant.id", "membership.merchant_id")
+          .innerJoin("merchants as merchant", (join) =>
+            join
+              .onRef("merchant.id", "=", "membership.merchant_id")
+              .onRef("merchant.mode", "=", "membership.mode")
+          )
           .leftJoin("merchant_products as products", (join) =>
             join
               .onRef("products.merchant_id", "=", "membership.merchant_id")
@@ -76,10 +80,10 @@ export async function resolveDashboardMembership(
         activeProducts: {
           airtime: membership.airtimeEnabled ?? false,
           collections: membership.collectionsEnabled ?? true,
-          payouts: membership.payoutsEnabled ?? true,
-          sms: membership.smsEnabled ?? true,
-          smsApi: membership.smsApiEnabled ?? membership.smsEnabled ?? false,
-          smsBroadcast: membership.smsBroadcastEnabled ?? membership.smsEnabled ?? false
+          payouts: membership.payoutsEnabled ?? false,
+          sms: membership.smsEnabled ?? false,
+          smsApi: membership.smsApiEnabled ?? false,
+          smsBroadcast: membership.smsBroadcastEnabled ?? false
         },
         merchantId: membership.merchantId,
         merchantName: membership.merchantName,

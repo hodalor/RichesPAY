@@ -15,6 +15,7 @@ import {
 import { ComplianceService } from "../compliance";
 import { LedgerService } from "../ledger";
 import { ApiRouteError } from "../lib/api-error";
+import { merchantCanTransact } from "../lib/merchant-access";
 import { FeeService } from "../pricing/fee-service";
 import { FxService } from "../pricing/fx-service";
 import { DatabasePricingRepository } from "../pricing/repository";
@@ -690,7 +691,7 @@ export class CollectionService {
         }
       });
 
-      return this.reconcileProviderResult({
+      const reconciled = await this.reconcileProviderResult({
         channelId: channel.id,
         collectionId,
         failureCode: providerResult.failureCode ?? null,
@@ -708,6 +709,18 @@ export class CollectionService {
         providerSession: providerResult.nextAction ?? null,
         recordStatusCheck: false
       });
+
+      if (input.mode === "test" && providerResult.deferredCallback) {
+        this.#scheduleTestModeCallback({
+          collectionId,
+          delaySeconds: providerResult.deferredCallback.delaySeconds,
+          providerRef: providerResult.providerRef ?? null,
+          providerStatus: providerResult.deferredCallback.providerStatus,
+          rawPayload: providerResult.rawRedacted
+        });
+      }
+
+      return reconciled;
     } catch (error) {
       const routeError = error instanceof ApiRouteError ? error : null;
       const outcome = routeError?.code === "provider_error" ? "unknown" : "failed";
@@ -991,6 +1004,23 @@ export class CollectionService {
     return mapRefund(updatedRefund);
   }
 
+  #scheduleTestModeCallback(input: {
+    collectionId: string;
+    delaySeconds: number;
+    providerRef: string | null;
+    providerStatus: string;
+    rawPayload: Json | null;
+  }) {
+    setTimeout(() => {
+      void this.applyProviderCallback({
+        collectionId: input.collectionId,
+        providerRef: input.providerRef,
+        providerStatus: input.providerStatus,
+        rawPayload: input.rawPayload
+      }).catch(() => undefined);
+    }, Math.max(0, input.delaySeconds) * 1000);
+  }
+
   #requireProviderCatalog() {
     if (!this.#providerCatalog) {
       throw new Error("Provider catalog is required for collection submission");
@@ -1027,6 +1057,7 @@ export class CollectionService {
 
       return {
         ...merchant,
+        mode,
         settlementCurrency: parseCurrencyCode(merchant.settlementCurrency)
       };
     });
@@ -1036,7 +1067,7 @@ export class CollectionService {
     merchant: MerchantCollectionContext,
     referenceType: CollectionReferenceType
   ) {
-    if (merchant.status !== "active") {
+    if (!merchantCanTransact({ mode: merchant.mode, status: merchant.status })) {
       throw new ApiRouteError({
         code: "merchant_suspended",
         message: getErrorDefinition("merchant_suspended").message,

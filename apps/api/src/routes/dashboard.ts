@@ -26,6 +26,7 @@ import { createSupabaseServiceClient } from "../auth/supabase-client";
 import { runWithSystemScope, type ScopedTransaction } from "../db";
 import { dashboardAuthPlugin } from "../plugins/dashboard-auth";
 import { ApiRouteError } from "../lib/api-error";
+import { parsePgTextArray } from "../lib/pg-array";
 import {
   createPlainApiKey,
   getApiKeyLast4,
@@ -106,6 +107,43 @@ async function requireSession(
   );
 }
 
+function isAuthEmailTakenError(error: { code?: string | undefined; message?: string | undefined } | null) {
+  const code = error?.code?.toLowerCase() ?? "";
+  const message = error?.message?.toLowerCase() ?? "";
+
+  return (
+    code === "email_exists" ||
+    code === "user_already_exists" ||
+    message.includes("already been registered") ||
+    message.includes("already registered")
+  );
+}
+
+async function findAuthUserIdByEmail(app: FastifyTypedInstance, email: string) {
+  const result = await app.dbPool.query<{ id: string }>(
+    "select id::text as id from auth.users where lower(email) = lower($1) limit 1",
+    [email]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+async function userHasMembership(app: FastifyTypedInstance, userId: string) {
+  const membership = await runWithSystemScope(
+    app.db,
+    "check signup membership",
+    async (trx) =>
+      trx
+        .selectFrom("memberships")
+        .select("merchant_id")
+        .where("user_id", "=", userId)
+        .executeTakeFirst(),
+    { audit: false }
+  );
+
+  return Boolean(membership);
+}
+
 function makeDateRange(input: {
   endDate?: string | undefined;
   startDate?: string | undefined;
@@ -162,27 +200,82 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
       // merchant provisioning tied to Auth user creation.
       const supabase = createSupabaseServiceClient(app.appEnv);
       const autoConfirmEmail = app.appEnv.APP_ENV !== "production";
+      const alreadyRegisteredMessage =
+        "This email is already registered. Sign in to open your dashboard, or use a different email to create another account.";
 
-      const { data, error } = await supabase.auth.admin.createUser({
-        email: body.email,
-        email_confirm: autoConfirmEmail,
-        password: body.password,
-        user_metadata: {
-          full_name: body.full_name
+      let userId = await findAuthUserIdByEmail(app, body.email);
+
+      if (userId) {
+        if (await userHasMembership(app, userId)) {
+          throw new ApiRouteError({
+            code: "validation_error",
+            field: "email",
+            message: alreadyRegisteredMessage,
+            statusCode: 400
+          });
         }
-      });
 
-      if (error || !data.user?.id) {
-        throw new ApiRouteError({
-          code: "validation_error",
-          field: "email",
-          message: error?.message ?? "Failed to create Supabase user",
-          statusCode: 400
+        const updated = await supabase.auth.admin.updateUserById(userId, {
+          email_confirm: autoConfirmEmail,
+          password: body.password,
+          user_metadata: {
+            full_name: body.full_name
+          }
         });
+
+        if (updated.error) {
+          throw new ApiRouteError({
+            code: "validation_error",
+            field: "email",
+            message: updated.error.message,
+            statusCode: 400
+          });
+        }
+      } else {
+        const { data, error } = await supabase.auth.admin.createUser({
+          email: body.email,
+          email_confirm: autoConfirmEmail,
+          password: body.password,
+          user_metadata: {
+            full_name: body.full_name
+          }
+        });
+
+        if (error || !data.user?.id) {
+          if (isAuthEmailTakenError(error)) {
+            const existingId = await findAuthUserIdByEmail(app, body.email);
+            if (existingId && !(await userHasMembership(app, existingId))) {
+              userId = existingId;
+            } else {
+              throw new ApiRouteError({
+                code: "validation_error",
+                field: "email",
+                message: alreadyRegisteredMessage,
+                statusCode: 400
+              });
+            }
+          } else {
+            throw new ApiRouteError({
+              code: "validation_error",
+              field: "email",
+              message: error?.message ?? "Failed to create Supabase user",
+              statusCode: 400
+            });
+          }
+        } else {
+          userId = data.user.id;
+        }
       }
 
-      const userId = data.user.id;
       const verificationRequired = !autoConfirmEmail;
+
+      if (!userId) {
+        throw new ApiRouteError({
+          code: "internal_error",
+          message: "Failed to create the owner account.",
+          statusCode: 500
+        });
+      }
 
       const merchant = await runWithSystemScope(
         app.db,
@@ -249,6 +342,17 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               sms_broadcast_enabled: body.sms_broadcast,
               sms_enabled: wantsSms
             })
+            .onConflict((conflict) =>
+              conflict.columns(["merchant_id", "mode"]).doUpdateSet({
+                airtime_enabled: body.airtime,
+                collections_enabled: body.collections,
+                payouts_enabled: body.payouts,
+                sms_api_enabled: body.sms_api,
+                sms_broadcast_enabled: body.sms_broadcast,
+                sms_enabled: wantsSms,
+                updated_at: new Date()
+              })
+            )
             .execute();
 
           await trx
@@ -312,7 +416,11 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
         async (trx) =>
           trx
             .selectFrom("memberships as membership")
-            .innerJoin("merchants as merchant", "merchant.id", "membership.merchant_id")
+            .innerJoin("merchants as merchant", (join) =>
+              join
+                .onRef("merchant.id", "=", "membership.merchant_id")
+                .onRef("merchant.mode", "=", "membership.mode")
+            )
             .select([
               "membership.merchant_id as merchant_id",
               "membership.mode as mode",
@@ -992,7 +1100,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
             name: key.name,
             prefix: key.prefix,
             revoked_at: key.revoked_at?.toISOString() ?? null,
-            scopes: key.scopes as ApiKeyScope[]
+            scopes: serializeApiKeyScopes(key.scopes)
           }))
         };
       }
@@ -1039,6 +1147,30 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
           throw new ApiRouteError({
             code: "forbidden",
             message: "Switch to an approved live merchant before creating a live key.",
+            statusCode: 403
+          });
+        }
+
+        const products = request.dashboardMembership!.activeProducts;
+        const allowedScopes = new Set<string>(["read"]);
+        if (products.collections) {
+          allowedScopes.add("collections");
+        }
+        if (products.payouts) {
+          allowedScopes.add("payouts");
+        }
+        if (products.sms) {
+          allowedScopes.add("sms");
+        }
+        if (products.airtime) {
+          allowedScopes.add("airtime");
+        }
+        const blockedScopes = body.scopes.filter((scope) => !allowedScopes.has(scope));
+        if (blockedScopes.length > 0) {
+          throw new ApiRouteError({
+            code: "product_not_enabled",
+            field: "scopes",
+            message: `This merchant cannot issue keys with ${blockedScopes.join(", ")}. Enable that product first.`,
             statusCode: 403
           });
         }
@@ -1094,7 +1226,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
             mode: createdKey.mode,
             name: createdKey.name,
             prefix: createdKey.prefix,
-            scopes: createdKey.scopes as ApiKeyScope[]
+            scopes: serializeApiKeyScopes(createdKey.scopes)
           }
         });
       }
@@ -1211,7 +1343,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
             mode: rolledKey.mode,
             prefix: rolledKey.prefix,
             previous_key_expires_at: rolledKey.previousKeyExpiresAt.toISOString(),
-            scopes: rolledKey.scopes as ApiKeyScope[]
+            scopes: serializeApiKeyScopes(rolledKey.scopes)
           }
         });
       }
@@ -1464,3 +1596,9 @@ async function ensureOwnerRemains(
 function hashInviteToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
+
+function serializeApiKeyScopes(value: unknown): ApiKeyScope[] {
+  const allowed = new Set<string>(apiKeyScopes);
+  return parsePgTextArray(value).filter((scope): scope is ApiKeyScope => allowed.has(scope));
+}
+

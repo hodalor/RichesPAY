@@ -139,6 +139,7 @@ export interface PaymentLinkPublicView {
   merchant: {
     displayName: string;
   };
+  mode: RpMode;
   reusable: boolean;
   slug: string;
   title: string;

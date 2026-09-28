@@ -186,6 +186,17 @@ async function provisionLiveMerchant(trx: ScopedTransaction, testMerchantId: str
       sms_broadcast_enabled: products?.sms_broadcast_enabled ?? false,
       sms_enabled: products?.sms_enabled ?? false
     })
+    .onConflict((conflict) =>
+      conflict.columns(["merchant_id", "mode"]).doUpdateSet({
+        airtime_enabled: products?.airtime_enabled ?? false,
+        collections_enabled: products?.collections_enabled ?? false,
+        payouts_enabled: products?.payouts_enabled ?? false,
+        sms_api_enabled: products?.sms_api_enabled ?? false,
+        sms_broadcast_enabled: products?.sms_broadcast_enabled ?? false,
+        sms_enabled: products?.sms_enabled ?? false,
+        updated_at: new Date()
+      })
+    )
     .execute();
 }
 

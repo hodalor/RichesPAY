@@ -20,7 +20,7 @@ Products are switched on per merchant: collections, payouts, sms, airtime. A mer
 1. Money is always an integer in minor units (bigint) plus an ISO 4217 currency code. Never use floats for money.
 2. Every balance change goes through the ledger service as a balanced double-entry journal. Never update a balance column directly.
 3. Every endpoint that moves money or sends SMS requires an Idempotency-Key header.
-4. Every tenant table has merchant_id. Every query is scoped by merchant_id. Row Level Security is enabled on every table.
+4. Every tenant table has merchant_id. Every query is scoped by merchant_id. Row Level Security is enabled on every table. Merchant-scoped queries also attach merchant_id and mode in application code so hosted database logins that skip SET ROLE cannot leak money records across merchants.
 5. Browser apps never query Supabase tables. They call apps/api only. The Supabase service role key exists only in apps/api.
 6. MNOs, SMS routes and card acquirers are called only through adapters in apps/api/src/providers. Business code never imports a specific provider.
 7. Never log or store full card numbers, CVV, PINs, OTP codes or API secrets. Mask phone numbers and emails in logs.

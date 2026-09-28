@@ -356,6 +356,13 @@ function SignUpPage() {
           Create account
         </Button>
         <p className="text-sm text-text-secondary">
+          Already registered?{" "}
+          <Link className="text-brand underline" to="/sign-in">
+            Sign in
+          </Link>
+          {" "}or use a different email.
+        </p>
+        <p className="text-sm text-text-secondary">
           Your settlement currency is fixed from the onboarding country.
         </p>
       </form>

@@ -3,6 +3,7 @@ export {
   registerDatabase,
   runWithMerchantScope,
   runWithSystemScope,
+  setRoleSwitchingEnabledForTests,
   type ScopedTransaction,
   withMerchantScope,
   withSystemScope

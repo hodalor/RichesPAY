@@ -138,6 +138,10 @@ export class SimulatorMobileMoneyProvider implements MobileMoneyProvider {
         };
       case "callback_success_5s":
         return {
+          deferredCallback: {
+            delaySeconds: 5,
+            providerStatus: "succeeded"
+          },
           outcome: "accepted",
           providerRef: buildSimulatorProviderRef("collect", req.reference, scenario),
           providerStatus: "accepted",
@@ -159,6 +163,10 @@ export class SimulatorMobileMoneyProvider implements MobileMoneyProvider {
       case "callback_success_3s":
       default:
         return {
+          deferredCallback: {
+            delaySeconds: 3,
+            providerStatus: "succeeded"
+          },
           outcome: "accepted",
           providerRef: buildSimulatorProviderRef("collect", req.reference, scenario),
           providerStatus: "accepted",

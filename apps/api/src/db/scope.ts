@@ -2,6 +2,7 @@ import { sql, type Transaction } from "kysely";
 
 import { newId } from "@richespay/shared";
 
+import { applyTenantPredicates } from "./tenant-guard";
 import type { AppDatabase } from "./client";
 import type { ActorType, DB, RpMode } from "./types";
 
@@ -28,10 +29,9 @@ export function registerDatabase(database: AppDatabase) {
 }
 
 /**
- * Hosted Supabase often blocks SET ROLE for the non-superuser `postgres`
- * pooler role. Local/dev Postgres (and tests) still support it. Detect once
- * and skip role switching when unavailable; table-owner / bypassrls access
- * remains sufficient for the API login role.
+ * Hosted Supabase often blocks SET ROLE for the non-superuser postgres
+ * pooler role. Merchant queries still attach merchant_id and mode predicates
+ * so tenant data cannot leak when the login role bypasses RLS.
  */
 export async function ensureRoleSwitchingDetected(
   database: AppDatabase = getDefaultDatabase()
@@ -47,21 +47,47 @@ export async function ensureRoleSwitchingDetected(
     roleSwitchingEnabled = true;
   } catch {
     roleSwitchingEnabled = false;
+    // Hosted logins may be table owners and bypass RLS. Tenant predicates
+    // on merchant-scoped queries are then the only isolation layer.
   }
 
   return roleSwitchingEnabled;
 }
 
+export function setRoleSwitchingEnabledForTests(value: boolean | null) {
+  roleSwitchingEnabled = value;
+}
+
 async function applyLocalRole(
   trx: ScopedTransaction,
-  role: "richespay_app" | "richespay_system"
+  role: "richespay_app" | "richespay_system",
+  database: AppDatabase
 ) {
-  const enabled = await ensureRoleSwitchingDetected();
+  const enabled = await ensureRoleSwitchingDetected(database);
   if (!enabled) {
     return;
   }
 
   await sql.raw(`set local role ${role}`).execute(trx);
+}
+
+function guardMerchantTransaction(
+  trx: ScopedTransaction,
+  merchantId: string,
+  mode: RpMode
+): ScopedTransaction {
+  const selectFrom = trx.selectFrom.bind(trx);
+  const updateTable = trx.updateTable.bind(trx);
+  const deleteFrom = trx.deleteFrom.bind(trx);
+
+  trx.selectFrom = ((table: Parameters<ScopedTransaction["selectFrom"]>[0]) =>
+    applyTenantPredicates(selectFrom(table), table, merchantId, mode)) as ScopedTransaction["selectFrom"];
+  trx.updateTable = ((table: Parameters<ScopedTransaction["updateTable"]>[0]) =>
+    applyTenantPredicates(updateTable(table), table, merchantId, mode)) as ScopedTransaction["updateTable"];
+  trx.deleteFrom = ((table: Parameters<ScopedTransaction["deleteFrom"]>[0]) =>
+    applyTenantPredicates(deleteFrom(table), table, merchantId, mode)) as ScopedTransaction["deleteFrom"];
+
+  return trx;
 }
 
 export async function runWithMerchantScope<T>(
@@ -71,11 +97,11 @@ export async function runWithMerchantScope<T>(
   fn: (trx: ScopedTransaction) => Promise<T>
 ): Promise<T> {
   return database.transaction().execute(async (trx) => {
-    await applyLocalRole(trx, "richespay_app");
+    await applyLocalRole(trx, "richespay_app", database);
     await sql`select set_config('app.merchant_id', ${merchantId}, true)`.execute(trx);
     await sql`select set_config('app.mode', ${mode}, true)`.execute(trx);
 
-    return fn(trx);
+    return fn(guardMerchantTransaction(trx, merchantId, mode));
   });
 }
 
@@ -114,7 +140,7 @@ export async function runWithSystemScope<T>(
   options: SystemScopeOptions = {}
 ): Promise<T> {
   return database.transaction().execute(async (trx) => {
-    await applyLocalRole(trx, "richespay_system");
+    await applyLocalRole(trx, "richespay_system", database);
 
     const result = await fn(trx);
 

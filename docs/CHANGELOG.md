@@ -1,6 +1,9 @@
 # Changelog
 
 ## 2026-09-28
+- Merchant-scoped queries now always filter merchant_id and mode in application code so payment links and other money records cannot leak across tenants if the database login bypasses RLS. Test-mode collections settle without a real phone prompt. API docs, OpenAPI, and the merchant PDF now list exact .env names, headers, and JSON fields, and say there is no handset approval in test mode.
+- Fixed dashboard API key create/list 500s when Postgres returned scopes as text, let pending-KYB merchants use test checkout and collections, and showed backend .env values when a secret is created.
+- Shortened dashboard dialogs so event and scope lists scroll, limited API key scopes and webhook events to products the merchant actually has, and hid live keys until KYB is approved. Test-mode balance top-up now adds sandbox funds immediately.
 - Allowed PUT, PATCH and DELETE on CORS preflight so the admin app can save merchant products and limits, and stopped the merchant Airtime tab from crashing when settlement currency is not ready yet.
 - Published airtime for integrators: OpenAPI descriptions and examples on `/v1/airtime`, a docs guide with cURL/Node/PHP/Python tabs, updates to test mode, errors, webhooks, countries, authentication and changelog, `@richespay/node` 0.1.0 with `airtime` and `airtimeBatches` helpers, and a Developers quick-start cURL for the 0001 test number.
 - Extended the admin app with airtime staff controls: Networks, Discount plans (defaults and audited merchant overrides), Float with history and low-threshold highlighting, global order search, merchant Airtime tab and limits, overview volume plus a low-float banner, and airtime velocity flags in the compliance queue.

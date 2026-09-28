@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { CheckoutService } from "../src/checkout/service";
 import { createDatabase, createDatabasePool } from "../src/db/client";
 import { startDevPostgres } from "../src/db/dev-postgres";
 import { applySqlMigrations } from "../src/db/migrations";
 import {
+  registerDatabase,
   runWithMerchantScope,
-  runWithSystemScope
+  runWithSystemScope,
+  setRoleSwitchingEnabledForTests
 } from "../src/db/scope";
 
 import type { AppDatabase } from "../src/db/client";
@@ -20,6 +23,7 @@ describe("merchant scope isolation", () => {
     devPostgres = await startDevPostgres();
     pool = createDatabasePool(devPostgres.connectionString);
     database = createDatabase(pool);
+    registerDatabase(database);
 
     await applySqlMigrations(pool);
 
@@ -147,5 +151,69 @@ describe("merchant scope isolation", () => {
       { id: "mer_scope_a", support_phone: "+233240000999" },
       { id: "mer_scope_b", support_phone: null }
     ]);
+  });
+
+  it("does not leak payment links across merchants when RLS is bypassed", async () => {
+    await runWithSystemScope(database, "seed payment links for isolation", async (trx) => {
+      await trx
+        .insertInto("payment_links")
+        .values([
+          {
+            active: true,
+            amount: 10000,
+            amount_mode: "fixed",
+            currency: "GHS",
+            description: null,
+            id: "lnk_scope_a",
+            merchant_id: "mer_scope_a",
+            min_amount: null,
+            mode: "test",
+            reusable: true,
+            slug: "link-merchant-a",
+            title: "Merchant A link"
+          },
+          {
+            active: true,
+            amount: 2500,
+            amount_mode: "fixed",
+            currency: "GHS",
+            description: null,
+            id: "lnk_scope_b",
+            merchant_id: "mer_scope_b",
+            min_amount: null,
+            mode: "test",
+            reusable: true,
+            slug: "link-merchant-b",
+            title: "Merchant B link"
+          }
+        ])
+        .execute();
+    });
+
+    setRoleSwitchingEnabledForTests(false);
+    try {
+      const visibleLinks = await runWithMerchantScope(
+        database,
+        "mer_scope_a",
+        "test",
+        async (trx) => trx.selectFrom("payment_links").selectAll().execute()
+      );
+
+      expect(visibleLinks).toHaveLength(1);
+      expect(visibleLinks[0]?.id).toBe("lnk_scope_a");
+      expect(visibleLinks[0]?.merchant_id).toBe("mer_scope_a");
+
+      const checkoutService = new CheckoutService({
+        database,
+        encryptionKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      });
+      const merchantALinks = await checkoutService.listPaymentLinks("mer_scope_a", "test");
+      const merchantBLinks = await checkoutService.listPaymentLinks("mer_scope_b", "test");
+
+      expect(merchantALinks.map((link) => link.id)).toEqual(["lnk_scope_a"]);
+      expect(merchantBLinks.map((link) => link.id)).toEqual(["lnk_scope_b"]);
+    } finally {
+      setRoleSwitchingEnabledForTests(null);
+    }
   });
 });

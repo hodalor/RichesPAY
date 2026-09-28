@@ -856,7 +856,7 @@ function dialogFrame({
   return (
     <div
       className={cn(
-        "fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-card border border-border bg-surface p-6 shadow-soft",
+        "fixed left-1/2 top-1/2 z-50 flex max-h-[min(82vh,36rem)] w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-card border border-border bg-surface p-6 shadow-soft",
         className
       )}
     >
@@ -894,8 +894,8 @@ export function Modal({
         <Dialog.Content asChild>
           {dialogFrame({
             children: (
-              <div className="space-y-4">
-                <div className="flex items-start justify-between gap-4">
+              <div className="flex min-h-0 flex-1 flex-col gap-4">
+                <div className="flex shrink-0 items-start justify-between gap-4">
                   <div>
                     <Dialog.Title className="text-lg font-semibold text-text">
                       {title}
@@ -912,7 +912,7 @@ export function Modal({
                     </Button>
                   </Dialog.Close>
                 </div>
-                {children}
+                <div className="min-h-0 overflow-y-auto pr-1">{children}</div>
               </div>
             )
           })}

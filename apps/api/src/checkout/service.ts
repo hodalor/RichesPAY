@@ -9,6 +9,7 @@ import {
 } from "../db";
 import type { Json, RpMode } from "../db/types";
 import { ApiRouteError } from "../lib/api-error";
+import { merchantCanTransact } from "../lib/merchant-access";
 import { parseCurrencyCode } from "../pricing/types";
 import { ProviderCatalog } from "../providers/catalog";
 import type {
@@ -48,7 +49,7 @@ export class CheckoutService {
       input.merchantId,
       input.mode,
       async (trx) => {
-        await this.#ensureMerchantCanCreateCheckout(trx, input.merchantId);
+        await this.#ensureMerchantCanCreateCheckout(trx, input.merchantId, input.mode);
 
         const created = await trx
           .insertInto("checkout_sessions")
@@ -162,6 +163,8 @@ export class CheckoutService {
         await trx
           .selectFrom("payment_links")
           .selectAll()
+          .where("merchant_id", "=", merchantId)
+          .where("mode", "=", mode)
           .orderBy("created_at", "desc")
           .execute()
       ).map(mapPaymentLink)
@@ -209,6 +212,8 @@ export class CheckoutService {
         .selectFrom("payment_links")
         .selectAll()
         .where("id", "=", linkId)
+        .where("merchant_id", "=", merchantId)
+        .where("mode", "=", mode)
         .executeTakeFirst();
 
       if (!existing) {
@@ -241,6 +246,8 @@ export class CheckoutService {
           ...(input.title !== undefined ? { title: input.title } : {})
         })
         .where("id", "=", linkId)
+        .where("merchant_id", "=", merchantId)
+        .where("mode", "=", mode)
         .returningAll()
         .executeTakeFirstOrThrow();
 
@@ -253,6 +260,8 @@ export class CheckoutService {
       const result = await trx
         .deleteFrom("payment_links")
         .where("id", "=", linkId)
+        .where("merchant_id", "=", merchantId)
+        .where("mode", "=", mode)
         .executeTakeFirst();
 
       if (!result || Number(result.numDeletedRows) === 0) {
@@ -312,7 +321,8 @@ export class CheckoutService {
       },
       reusable: link.reusable,
       slug: link.slug,
-      title: link.title
+      title: link.title,
+      mode: link.mode
     };
   }
 
@@ -706,7 +716,8 @@ export class CheckoutService {
 
   async #ensureMerchantCanCreateCheckout(
     trx: ScopedTransaction,
-    merchantId: string
+    merchantId: string,
+    mode: RpMode
   ) {
     const merchant = await trx
       .selectFrom("merchants")
@@ -718,7 +729,7 @@ export class CheckoutService {
       throw notFoundError("Merchant not found");
     }
 
-    if (merchant.status !== "active") {
+    if (!merchantCanTransact({ mode, status: merchant.status })) {
       throw new ApiRouteError({
         code: "merchant_suspended",
         message: getErrorDefinition("merchant_suspended").message,

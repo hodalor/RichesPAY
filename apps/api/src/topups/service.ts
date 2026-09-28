@@ -14,6 +14,7 @@ import {
 } from "../db";
 import { LedgerService } from "../ledger";
 import { ApiRouteError } from "../lib/api-error";
+import { merchantCanTransact } from "../lib/merchant-access";
 import { parseCurrencyCode } from "../pricing/types";
 import { ProviderCatalog } from "../providers/catalog";
 import type { RpMode } from "../db/types";
@@ -555,7 +556,7 @@ export class TopupService {
 
       return {
         id: merchant.id,
-        mode: merchant.mode,
+        mode,
         settlementCurrency: parseCurrencyCode(merchant.settlement_currency),
         status: merchant.status,
         topupTransferReference: ensureTopupTransferReference(merchant.topup_transfer_reference)
@@ -564,7 +565,7 @@ export class TopupService {
   }
 
   #assertMerchantCanTopUp(merchant: MerchantTopupContext) {
-    if (merchant.status !== "active") {
+    if (!merchantCanTransact({ mode: merchant.mode, status: merchant.status })) {
       throw new ApiRouteError({
         code: "merchant_suspended",
         message: getErrorDefinition("merchant_suspended").message,

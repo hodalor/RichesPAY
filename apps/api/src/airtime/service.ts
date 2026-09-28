@@ -24,6 +24,7 @@ import {
 import type { Json, RpMode } from "../db/types";
 import { LedgerService } from "../ledger";
 import { ApiRouteError } from "../lib/api-error";
+import { merchantCanTransact } from "../lib/merchant-access";
 import { requireProduct } from "../products/require-product";
 import { FxService } from "../pricing/fx-service";
 import { DatabasePricingRepository } from "../pricing/repository";
@@ -1604,12 +1605,7 @@ export class AirtimeService {
 }
 
 function merchantCanSend(merchant: AirtimeMerchantContext) {
-  if (merchant.status === "active") {
-    return true;
-  }
-
-  // Sandbox merchants transact in test mode while KYB is still under review.
-  return merchant.mode === "test" && merchant.status === "pending_kyb";
+  return merchantCanTransact({ mode: merchant.mode, status: merchant.status });
 }
 
 function parseRecipientPhone(rawPhone: string, merchantCountry: string) {

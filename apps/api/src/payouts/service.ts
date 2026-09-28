@@ -11,6 +11,7 @@ import {
 import type { Json, JsonObject } from "../db/types";
 import { LedgerService } from "../ledger";
 import { ApiRouteError } from "../lib/api-error";
+import { merchantCanTransact } from "../lib/merchant-access";
 import { FeeService } from "../pricing/fee-service";
 import { DatabasePricingRepository } from "../pricing/repository";
 import { parseCurrencyCode } from "../pricing/types";
@@ -1544,6 +1545,7 @@ export class PayoutService {
 
       return {
         ...merchant,
+        mode,
         payoutApprovalThresholdMinor: merchant.payoutApprovalThresholdMinor
           ? BigInt(merchant.payoutApprovalThresholdMinor)
           : null,
@@ -1553,7 +1555,7 @@ export class PayoutService {
   }
 
   #assertMerchantCanPayout(merchant: MerchantPayoutContext) {
-    if (merchant.status !== "active") {
+    if (!merchantCanTransact({ mode: merchant.mode, status: merchant.status })) {
       throw new ApiRouteError({
         code: "merchant_suspended",
         message: getErrorDefinition("merchant_suspended").message,

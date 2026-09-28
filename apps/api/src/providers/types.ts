@@ -21,6 +21,10 @@ export interface ProviderOperationContext {
 }
 
 export interface ProviderResult {
+  deferredCallback?: {
+    delaySeconds: number;
+    providerStatus: string;
+  };
   failureCode?: string;
   nextAction?: Json | null;
   outcome: ProviderOutcome;

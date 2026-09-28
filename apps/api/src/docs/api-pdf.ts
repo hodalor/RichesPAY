@@ -28,13 +28,17 @@ const publicGuide: PdfBlock[] = [
   },
   {
     kind: "body",
+    text: "Put these on the server only: RICHESPAY_SECRET_KEY=rp_test_sk_... RICHESPAY_BASE_URL=https://api.richespay.com RICHESPAY_WEBHOOK_SECRET=whsec_..."
+  },
+  {
+    kind: "body",
     text: "Amounts are integers in minor units. POST requests that move money or send SMS or airtime require an Idempotency-Key header. Success is { data }. Errors are { error: { code, message, field, request_id } }."
   },
 
   { kind: "heading", text: "Collect a payment" },
   {
     kind: "body",
-    text: "Phone implies mobile money. Keep your reference stable so webhooks match your order."
+    text: "Phone implies mobile money. Keep your reference stable so webhooks match your order. Required JSON fields are amount (integer minor units), currency (GHS or ZMW), and phone (E.164). Optional: reference, description, customer.name, customer.email."
   },
   {
     kind: "code",
@@ -45,7 +49,13 @@ const publicGuide: PdfBlock[] = [
   },
   {
     kind: "body",
-    text: "Response data includes id (col_...), status, amount, currency, phone, network, and reference. Status becomes successful or failed on the webhook."
+    text: "Response data includes id (col_...), status, amount, currency, phone, network, and reference. Status becomes successful or failed on the webhook. In test mode there is no phone prompt: use a number ending 0001, wait a few seconds, then read collection.successful or GET /v1/collections/:id."
+  },
+
+  { kind: "heading", text: "Test mode" },
+  {
+    kind: "body",
+    text: "Test keys never hit a real network. There is no USSD prompt to approve. Use +233241230001 or +260970000001 (last four 0001) and wait a few seconds. 0002 fails immediately. 0003 stays pending. Add sandbox funds from the dashboard Balance page before payouts, SMS, or airtime."
   },
 
   { kind: "heading", text: "Send a payout" },

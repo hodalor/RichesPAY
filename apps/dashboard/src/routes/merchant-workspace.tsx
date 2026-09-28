@@ -551,6 +551,51 @@ const apiKeyScopeOptions = [
   { description: "Single and bulk airtime top-ups.", label: "Airtime", value: "airtime" },
   { description: "Read-only balance and listing endpoints.", label: "Read", value: "read" }
 ] as const;
+
+function scopesForProducts(products: SessionData["active_products"]) {
+  return apiKeyScopeOptions.filter((scope) => {
+    if (scope.value === "read") {
+      return true;
+    }
+    if (scope.value === "collections") {
+      return products.collections;
+    }
+    if (scope.value === "payouts") {
+      return products.payouts;
+    }
+    if (scope.value === "sms") {
+      return products.sms;
+    }
+    return products.airtime;
+  });
+}
+
+function webhookEventsForProducts(products: SessionData["active_products"]) {
+  return webhookEventOptions.filter((event) => {
+    if (
+      event.value === "*" ||
+      event.value === "balance.low" ||
+      event.value === "webhook.test" ||
+      event.value.startsWith("merchant.")
+    ) {
+      return true;
+    }
+    if (event.value.startsWith("collection.")) {
+      return products.collections;
+    }
+    if (event.value.startsWith("payout")) {
+      return products.payouts;
+    }
+    if (event.value.startsWith("sms.")) {
+      return products.sms;
+    }
+    if (event.value.startsWith("airtime")) {
+      return products.airtime;
+    }
+    return true;
+  });
+}
+
 const httpMethodOptions = [
   { label: "All methods", value: "" },
   { label: "GET", value: "GET" },
@@ -895,7 +940,7 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
   const [newApiKeyMode, setNewApiKeyMode] = React.useState<MerchantMode>("test");
   const [apiKeyModeFilter, setApiKeyModeFilter] = React.useState("");
   const [newApiKeyIpAllowlist, setNewApiKeyIpAllowlist] = React.useState("");
-  const [newApiKeyScopes, setNewApiKeyScopes] = React.useState<string[]>(["collections", "payouts", "sms", "airtime", "read"]);
+  const [newApiKeyScopes, setNewApiKeyScopes] = React.useState<string[]>(["read"]);
   const [requestingProduct, setRequestingProduct] = React.useState<string | null>(null);
   const [creatingApiKey, setCreatingApiKey] = React.useState(false);
   const [inviteOpen, setInviteOpen] = React.useState(false);
@@ -973,6 +1018,25 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
   const merchantId = session?.merchant_id ?? selectedMerchantId ?? null;
   const timeZone = session?.timezone ?? "UTC";
   const currency = session?.settlement_currency ?? "GHS";
+  const availableApiKeyScopes = React.useMemo(
+    () => (session ? scopesForProducts(session.active_products) : apiKeyScopeOptions.filter((scope) => scope.value === "read")),
+    [session]
+  );
+  const availableWebhookEvents = React.useMemo(
+    () => (session ? webhookEventsForProducts(session.active_products) : [...webhookEventOptions]),
+    [session]
+  );
+  const canCreateLiveKeys = session?.mode === "live" && session.compliance.status === "active";
+
+  React.useEffect(() => {
+    setNewApiKeyScopes(availableApiKeyScopes.map((scope) => scope.value));
+  }, [availableApiKeyScopes]);
+
+  React.useEffect(() => {
+    if (!canCreateLiveKeys) {
+      setNewApiKeyMode("test");
+    }
+  }, [canCreateLiveKeys]);
 
   const collectionsQuery = useQuery({
     enabled: Boolean(auth.accessToken && merchantId && currentPage === "/collections"),
@@ -1042,7 +1106,7 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
 
   const paymentLinksQuery = useQuery({
     enabled: Boolean(auth.accessToken && merchantId && currentPage === "/payment-links"),
-    queryKey: ["dashboard-payment-links", auth.accessToken, merchantId],
+    queryKey: ["dashboard-payment-links", auth.accessToken, merchantId, session?.mode],
     queryFn: () =>
       apiRequest<PaymentLinkRow[]>("/dashboard/v1/payment-links", {
         accessToken: auth.accessToken,
@@ -1975,7 +2039,9 @@ ${airtimeCurl}`
           kind: "secret",
           mode: newApiKeyMode,
           name: newApiKeyName,
-          scopes: newApiKeyScopes
+          scopes: newApiKeyScopes.filter((scope) =>
+            availableApiKeyScopes.some((option) => option.value === scope)
+          )
         }),
         merchantId,
         method: "POST"
@@ -2706,7 +2772,7 @@ ${airtimeCurl}`
             <>
               <PageHeader
                 action={<Button onClick={() => setPaymentLinkOpen(true)} variant="primary">Create link</Button>}
-                subtitle="Reusable payment links for collecting money without writing code."
+                subtitle="Reusable payment links for this merchant only. Test and Live links never mix, and other merchants cannot see these rows."
                 title="Payment links"
               />
               <SummaryCardGrid columns={3}>
@@ -3507,10 +3573,16 @@ ${airtimeCurl}`
                 loading={statementQuery.isLoading}
                 pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 20 }}
               />
-              <Modal onOpenChange={setTopupOpen} open={topupOpen} title="Top up balance">
+              <Modal onOpenChange={setTopupOpen} open={topupOpen} title={session.mode === "test" ? "Add test funds" : "Top up balance"}>
                 <div className="space-y-4">
                   <Input label={`Amount (${currency})`} onChange={(event) => setTopupAmount(event.target.value)} value={topupAmount} />
-                  <Select label="Method" onValueChange={setTopupMethod} options={[{ label: "Bank transfer", value: "bank_transfer" }, { label: "Mobile money", value: "mobile_money" }, { label: "Card", value: "card" }]} value={topupMethod} />
+                  {session.mode === "test" ? (
+                    <p className="text-sm text-text-secondary">
+                      Test funds credit the sandbox ledger immediately. They never leave the simulator and cannot be withdrawn live.
+                    </p>
+                  ) : (
+                    <Select label="Method" onValueChange={setTopupMethod} options={[{ label: "Bank transfer", value: "bank_transfer" }, { label: "Mobile money", value: "mobile_money" }, { label: "Card", value: "card" }]} value={topupMethod} />
+                  )}
                   <div className="flex justify-end gap-3">
                     <Button
                       onClick={async () => {
@@ -3518,26 +3590,41 @@ ${airtimeCurl}`
                           return;
                         }
                         try {
-                          await apiRequest("/dashboard/v1/topups", {
+                          await apiRequest(session.mode === "test" ? "/dashboard/v1/topups/test-funds" : "/dashboard/v1/topups", {
                             accessToken: auth.accessToken,
-                            body: JSON.stringify({
-                              amount: Number(topupAmount),
-                              currency,
-                              method: topupMethod
-                            }),
+                            body: JSON.stringify(
+                              session.mode === "test"
+                                ? {
+                                    amount: Number(topupAmount),
+                                    currency
+                                  }
+                                : {
+                                    amount: Number(topupAmount),
+                                    currency,
+                                    method: topupMethod
+                                  }
+                            ),
                             merchantId,
                             method: "POST"
                           });
                           setTopupOpen(false);
-                          pushToast({ title: "Top-up started", description: "Your top-up request has been created.", variant: "success" });
+                          pushToast({
+                            title: session.mode === "test" ? "Test funds added" : "Top-up started",
+                            description:
+                              session.mode === "test"
+                                ? "Sandbox balance is ready for payouts, SMS, and airtime."
+                                : "Your top-up request has been created.",
+                            variant: "success"
+                          });
                           await queryClient.invalidateQueries({ queryKey: ["dashboard-balance"] });
+                          await queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
                         } catch (error) {
                           pushToast({ title: "Top-up failed", description: error instanceof ApiError ? error.message : "Unable to start the top-up.", variant: "danger" });
                         }
                       }}
                       variant="primary"
                     >
-                      Start top-up
+                      {session.mode === "test" ? "Add test funds" : "Start top-up"}
                     </Button>
                   </div>
                 </div>
@@ -3623,11 +3710,15 @@ ${airtimeCurl}`
                   <div className="space-y-4">
                     <CopyField label="Suggested test key prefix" value={testSecretKeyPrefix} />
                     <div className="rounded-card border border-warning/30 bg-warning/10 p-4 text-sm text-amber-900">
-                      <p className="font-semibold">Use test mode first</p>
+                      <p className="font-semibold">Sandbox is already on</p>
                       <p className="mt-1">
-                        Simulator numbers ending in <code>0001</code> succeed, <code>0002</code> fail,
-                        and <code>0003</code> stay pending until a later status check. Airtime uses the
-                        same last-four shortcuts on the recipient number.
+                        Keep the shell on <strong>Test</strong>. Test keys only hit the simulator, never a real network.
+                        There is no prompt to approve on a phone. For collections, use a Ghana/Zambia test MSISDN ending in <code>0001</code> (succeeds in a few seconds),
+                        <code>0002</code> (fail), or <code>0003</code> (stays pending). No extra simulator to launch.
+                      </p>
+                      <p className="mt-2">
+                        Collections credit the sandbox ledger when they succeed. For payouts, SMS, or airtime, open
+                        Balance and choose <strong>Add test funds</strong> so you have fake money to spend.
                       </p>
                     </div>
                   </div>
@@ -4077,12 +4168,21 @@ ${airtimeCurl}`
                   <Select
                     label="Mode"
                     onValueChange={(value) => setNewApiKeyMode(value as MerchantMode)}
-                    options={[
-                      { label: "Test", value: "test" },
-                      { label: "Live", value: "live" }
-                    ]}
+                    options={
+                      canCreateLiveKeys
+                        ? [
+                            { label: "Test", value: "test" },
+                            { label: "Live", value: "live" }
+                          ]
+                        : [{ label: "Test", value: "test" }]
+                    }
                     value={newApiKeyMode}
                   />
+                  {!canCreateLiveKeys ? (
+                    <p className="text-sm text-text-secondary">
+                      Live keys stay locked until KYB is approved and you switch this merchant to live.
+                    </p>
+                  ) : null}
                   <Input
                     label="IP allowlist"
                     onChange={(event) => setNewApiKeyIpAllowlist(event.target.value)}
@@ -4091,8 +4191,8 @@ ${airtimeCurl}`
                   />
                   <div className="space-y-3">
                     <p className="text-sm font-medium text-text-secondary">Scopes</p>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {apiKeyScopeOptions.map((scope) => (
+                    <div className="grid max-h-56 gap-3 overflow-y-auto pr-1 md:grid-cols-2">
+                      {availableApiKeyScopes.map((scope) => (
                         <Checkbox
                           checked={newApiKeyScopes.includes(scope.value)}
                           key={scope.value}
@@ -4120,8 +4220,8 @@ ${airtimeCurl}`
                   />
                   <div className="space-y-3">
                     <p className="text-sm font-medium text-text-secondary">Events</p>
-                    <div className="grid gap-3">
-                      {webhookEventOptions.map((eventOption) => (
+                    <div className="grid max-h-56 gap-3 overflow-y-auto pr-1">
+                      {availableWebhookEvents.map((eventOption) => (
                         <Checkbox
                           checked={newWebhookEvents.includes(eventOption.value)}
                           key={eventOption.value}
@@ -4157,6 +4257,12 @@ ${airtimeCurl}`
                       </p>
                     </div>
                     <CopyField label={`${apiKeySecret.mode === "test" ? "Test" : "Live"} secret`} value={apiKeySecret.key} />
+                    <CopyField label="RICHESPAY_SECRET_KEY" value={apiKeySecret.key} />
+                    <CopyField label="RICHESPAY_BASE_URL" value={env.apiBaseUrl.replace(/\/$/, "")} />
+                    <p className="text-sm text-text-secondary">
+                      Put these in your server .env only. Never ship <code>rp_test_sk_</code> or{" "}
+                      <code>rp_live_sk_</code> in a browser or mobile app.
+                    </p>
                     {apiKeySecret.previousKeyExpiresAt ? (
                       <p className="text-sm text-text-secondary">
                         The previous key will stop working at {formatDateTime(apiKeySecret.previousKeyExpiresAt, timeZone)}.
@@ -4184,6 +4290,7 @@ ${airtimeCurl}`
                     </div>
                     <CopyField label="Endpoint URL" value={webhookSecret.url} />
                     <CopyField label="Signing secret" value={webhookSecret.signingSecret} />
+                    <CopyField label="RICHESPAY_WEBHOOK_SECRET" value={webhookSecret.signingSecret} />
                   </div>
                 ) : null}
               </Modal>

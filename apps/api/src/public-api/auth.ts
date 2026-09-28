@@ -1,10 +1,11 @@
 import ipaddr from "ipaddr.js";
 
-import { getErrorDefinition, type ApiKeyScope } from "@richespay/shared";
+import { getErrorDefinition, type ApiKeyScope, apiKeyScopes } from "@richespay/shared";
 
 import { runWithMerchantScope, runWithSystemScope, type AppDatabase, type ScopedTransaction } from "../db";
 import type { ApiKeyKind, MerchantStatus, RpMode } from "../db/types";
 import { ApiRouteError } from "../lib/api-error";
+import { parsePgTextArray } from "../lib/pg-array";
 import { constantTimeHashesMatch, getApiKeyPrefix, hashApiKey, parseApiKey } from "./api-keys";
 
 export interface PublicApiKeyContext {
@@ -123,7 +124,9 @@ export async function authenticateApiKey(
     mode: match.mode,
     rateLimitRps: match.rateLimitRps,
     revokedAt: match.revokedAt,
-    scopes: match.scopes as ApiKeyScope[]
+    scopes: parsePgTextArray(match.scopes).filter((scope): scope is ApiKeyScope =>
+      (apiKeyScopes as readonly string[]).includes(scope)
+    )
   };
 }
 

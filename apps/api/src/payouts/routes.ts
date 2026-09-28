@@ -90,16 +90,28 @@ const payoutBatchResponseSchema = z.object({
 });
 
 const payoutItemBodySchema = z.object({
-  account_name: z.string().min(1).max(120).optional(),
-  account_number: z.string().min(4).max(64).optional(),
-  amount: z.coerce.number().int().positive(),
-  bank_code: z.string().min(1).max(32).optional(),
+  account_name: z.string().min(1).max(120).optional().describe("Required for bank payouts."),
+  account_number: z.string().min(4).max(64).optional().describe("Required for bank payouts."),
+  amount: z.coerce
+    .number()
+    .int()
+    .positive()
+    .describe("Integer minor units in the merchant settlement currency. 2000 GHS is GHS 20.00."),
+  bank_code: z.string().min(1).max(32).optional().describe("Required for bank payouts."),
   metadata: metadataSchema.optional(),
-  method: z.enum(payoutMethods).optional(),
+  method: z
+    .enum(payoutMethods)
+    .optional()
+    .describe("Omit when phone is present. Phone implies mobile_money. Bank fields imply bank."),
   narration: z.string().min(1).max(255).optional(),
-  network: z.string().min(1).max(64).optional(),
-  phone: z.string().min(4).max(32).optional(),
-  reference: z.string().min(1).max(128).optional()
+  network: z.string().min(1).max(64).optional().describe("Optional. Omit unless you must override prefix detection."),
+  phone: z
+    .string()
+    .min(4)
+    .max(32)
+    .optional()
+    .describe("E.164 for mobile money, for example +233241230001. In test mode last four 0001 succeed."),
+  reference: z.string().min(1).max(128).optional().describe("Your payout id. Keep it stable.")
 });
 
 export async function registerPayoutRoutes(app: FastifyTypedInstance) {
@@ -154,13 +166,19 @@ export async function registerPayoutRoutes(app: FastifyTypedInstance) {
       preHandler: [requireIdempotency()],
       schema: {
         body: payoutItemBodySchema.extend({
-          currency: z.enum(pricingCurrencies)
+          currency: z
+            .enum(pricingCurrencies)
+            .describe("Must match the merchant settlement currency (GHS or ZMW).")
         }),
+        description:
+          "Sends one payout. Requires the payouts scope, an Idempotency-Key, and sandbox funds in test mode.\n\nMobile money example: { \"amount\": 2000, \"currency\": \"GHS\", \"phone\": \"+233241230001\", \"reference\": \"PAY-1001\" }\nBank example: { \"amount\": 2000, \"currency\": \"GHS\", \"account_name\": \"Jane Mensah\", \"account_number\": \"1234560001\", \"bank_code\": \"GCB\", \"reference\": \"PAY-1001\" }\n\nResponse data includes id (pay_...), status, amount, currency, phone or bank fields, and reference.",
         response: {
           201: z.object({
             data: payoutResponseSchema
           })
-        }
+        },
+        summary: "Create a payout",
+        tags: ["Payouts"]
       }
     },
     async (request, reply) => {

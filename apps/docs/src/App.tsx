@@ -49,9 +49,9 @@ const guides: GuideDefinition[] = [
       {
         title: "Start in 3 steps",
         paragraphs: [
-          "1. Create a test secret key in the dashboard.",
-          "2. Create a collection with an amount in minor units.",
-          "3. Receive the signed webhook and trust the final status there."
+          "1. Create a test secret key in Developers. Copy it once into your server .env as RICHESPAY_SECRET_KEY.",
+          "2. POST /v1/collections with Authorization: Bearer $RICHESPAY_SECRET_KEY, Idempotency-Key, and JSON amount, currency, phone.",
+          "3. In test mode do not wait for a phone prompt. A number ending in 0001 becomes successful after a few seconds. Fulfil on the signed webhook, or GET /v1/collections/:id."
         ],
         example: {
           title: "Create your first test collection",
@@ -187,6 +187,63 @@ const guides: GuideDefinition[] = [
             `)
           }
         }
+      },
+      {
+        title: "Put credentials in your backend .env",
+        paragraphs: [
+          "Merchants copy a secret key from Developers. That key is the only credential their app needs for /v1. Store it on the server, not in a browser or mobile binary.",
+          "After you create a webhook endpoint, copy the signing secret once and keep it next to the API key."
+        ],
+        bullets: [
+          "RICHESPAY_SECRET_KEY=rp_test_sk_... (or rp_live_sk_... after KYB)",
+          "RICHESPAY_BASE_URL=http://127.0.0.1:3000 locally, or https://api.richespay.com in production",
+          "RICHESPAY_WEBHOOK_SECRET=whsec_... from Developers → Webhooks"
+        ],
+        example: {
+          title: "Load the key from env",
+          description: "The Node SDK reads the secret from process.env and points at your API origin.",
+          snippets: {
+            curl: trimCode(`
+              curl "$RICHESPAY_BASE_URL/v1/balance" \\
+                -H "Authorization: Bearer $RICHESPAY_SECRET_KEY"
+            `),
+            node: trimCode(`
+              import { RichesPay } from "@richespay/node";
+
+              const richespay = new RichesPay(process.env.RICHESPAY_SECRET_KEY, {
+                baseUrl: process.env.RICHESPAY_BASE_URL
+              });
+
+              const page = await richespay.collections.list({ limit: 1 });
+              console.log(page);
+            `),
+            php: trimCode(`
+              <?php
+
+              $ch = curl_init(getenv("RICHESPAY_BASE_URL") . "/v1/balance");
+              curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER => [
+                  "Authorization: Bearer " . getenv("RICHESPAY_SECRET_KEY")
+                ]
+              ]);
+
+              echo curl_exec($ch);
+            `),
+            python: trimCode(`
+              import os
+              from urllib import request
+
+              req = request.Request(
+                  os.environ["RICHESPAY_BASE_URL"] + "/v1/balance",
+                  headers={"Authorization": "Bearer " + os.environ["RICHESPAY_SECRET_KEY"]},
+                  method="GET",
+              )
+
+              print(request.urlopen(req).read().decode())
+            `)
+          }
+        }
       }
     ]
   },
@@ -198,9 +255,16 @@ const guides: GuideDefinition[] = [
       {
         title: "Use simulator destinations",
         paragraphs: [
-          "Phone numbers ending in 0001 succeed, 0002 fail immediately, and 0003 stay pending until later resolution.",
-          "Card numbers 4000000000000001, 4000000000000002, and 4000000000000003 cover success, decline, and 3-D Secure.",
+          "Test keys never reach a real network. There is no USSD prompt and nothing to approve on a handset. The last four digits of the destination number choose the outcome.",
+          "Use Ghana +233241230001 or Zambia +260970000001 for a successful collection. The API returns status processing, then the simulator marks it successful after about 5 seconds. Keep the checkout page open, poll GET /v1/collections/:id, or wait for collection.successful.",
+          "Phone numbers ending in 0002 fail immediately. 0003 stay pending. Cards 4000000000000001 succeed, 4000000000000002 decline, 4000000000000003 need 3-D Secure.",
           "Airtime uses the same last-four shortcuts on the recipient number: 0001 succeeds, 0002 fails as invalid_phone_number, 0003 stays pending then succeeds, 0004 fails as airtime_unavailable, and 0005 times out, stays processing, and is never resent."
+        ],
+        bullets: [
+          "Headers: Authorization: Bearer rp_test_sk_... and Idempotency-Key: <unique string>.",
+          "Body: { \"amount\": 5000, \"currency\": \"GHS\", \"phone\": \"+233241230001\", \"reference\": \"SIM-0001\" }.",
+          "Do not send network unless you must override prefix detection.",
+          "Payouts, SMS, and airtime spend sandbox funds. Dashboard → Balance → Add test funds."
         ],
         example: {
           title: "Trigger a successful test collection",
@@ -292,6 +356,18 @@ const guides: GuideDefinition[] = [
           "For mobile money, a phone number is enough to infer the default method.",
           "Keep your own reference stable so webhooks and dashboard search line up with your order record."
         ],
+        bullets: [
+          "POST /v1/collections with Authorization: Bearer rp_test_sk_... (the secret from Developers, shown once).",
+          "Header Idempotency-Key: any unique string per attempt. Required on every money POST.",
+          "Header Content-Type: application/json.",
+          "amount: integer minor units. 5000 with currency GHS is GHS 50.00, not 5000 cedis.",
+          "currency: GHS for Ghana wallets, ZMW for Zambia wallets.",
+          "phone: E.164, for example +233241230001. Last four digits 0001 succeed in test mode.",
+          "reference: your order id. Optional but keep it stable.",
+          "Do not send network unless you must override prefix detection.",
+          "Response data.id is col_.... status starts as processing. collection.successful is the fulfilment event.",
+          "GET /v1/collections/:id if a webhook is missed. Lists are GET /v1/collections?limit=20&status=successful."
+        ],
         example: {
           title: "List collections",
           description: "Cursor pagination uses limit and starting_after everywhere.",
@@ -348,8 +424,17 @@ const guides: GuideDefinition[] = [
       {
         title: "Create a hosted checkout session",
         paragraphs: [
-          "Use a public key for session creation, then redirect the customer to the returned URL.",
-          "For payment links, RichesPay creates the session from the link slug and returns a hosted URL."
+          "Payment links are created in the merchant dashboard, not through /v1. Each link belongs to one merchant and one mode (Test or Live). Share the hosted URL /link/{slug}.",
+          "Hosted checkout sessions are created with a public key (rp_test_pk_... or rp_live_pk_...), then redirect the customer to data.url.",
+          "In test mode the customer does not approve anything on a phone. Enter +233241230001 (or any number ending 0001). The waiting screen settles in a few seconds."
+        ],
+        bullets: [
+          "POST /v1/checkout/sessions Authorization: Bearer rp_test_pk_... (public key, not the secret).",
+          "allowed_methods: [\"mobile_money\"] or [\"mobile_money\",\"card\"].",
+          "amount: integer minor units. currency: GHS or ZMW.",
+          "Optional: description, reference, customer { name, email }, success_url, cancel_url.",
+          "Response: { \"data\": { \"id\": \"cs_...\", \"url\": \"https://checkout.../session/cs_...?key=rp_test_pk_...\" } }.",
+          "Payment-link pay body: { \"phone\": \"+233241230001\" }. method and network are optional."
         ],
         example: {
           title: "Create a checkout session",
@@ -514,7 +599,14 @@ const guides: GuideDefinition[] = [
         title: "Create a payout batch",
         paragraphs: [
           "Every payout write needs an Idempotency-Key.",
-          "Amounts are always minor units in the merchant settlement currency."
+          "Amounts are always minor units in the merchant settlement currency. Test payouts spend sandbox funds from Balance → Add test funds. Numbers ending 0001 succeed; there is no real transfer to approve."
+        ],
+        bullets: [
+          "POST /v1/payouts with Authorization: Bearer rp_test_sk_... and Idempotency-Key.",
+          "Mobile money: { \"amount\": 2000, \"currency\": \"GHS\", \"phone\": \"+233241230001\", \"reference\": \"PAY-1001\" }.",
+          "Bank: add account_name, account_number, and bank_code instead of phone.",
+          "Do not send method unless you must override inference.",
+          "Response data.id is pay_.... Fulfil on payout.successful."
         ],
         example: {
           title: "Submit a payout batch",
@@ -1071,8 +1163,15 @@ const guides: GuideDefinition[] = [
         title: "Verify the signature header",
         paragraphs: [
           "RichesPay signs the raw request body with t=<unix>,v1=<hex hmac>.",
-          "Use your endpoint secret exactly once when the endpoint is created or rolled.",
+          "Copy RICHESPAY_WEBHOOK_SECRET=whsec_... once when you create the endpoint in Developers → Webhooks.",
           "Airtime events are airtime.successful, airtime.failed, and airtime_batch.completed. Fulfil on success, stop on failure, and treat a completed batch as the bulk run finishing."
+        ],
+        bullets: [
+          "Your endpoint must accept POST and respond HTTP 200.",
+          "Header RichesPay-Signature: t=<unix>,v1=<hex HMAC-SHA256 of \"t.body\">.",
+          "Verify the signature on the raw body before JSON.parse.",
+          "collection.successful / payout.successful / sms.delivered / airtime.successful: fulfil.",
+          "*.failed: stop. If a webhook is missed, GET the resource by id."
         ],
         example: {
           title: "Verify a webhook signature",

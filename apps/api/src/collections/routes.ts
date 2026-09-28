@@ -93,23 +93,47 @@ export async function registerCollectionRoutes(app: FastifyTypedInstance) {
       preHandler: [requireIdempotency()],
       schema: {
         body: z.object({
-          amount: z.coerce.number().int().positive(),
-          cancel_url: z.string().url().optional(),
-          currency: z.enum(pricingCurrencies),
+          amount: z.coerce
+            .number()
+            .int()
+            .positive()
+            .describe("Integer minor units. 5000 with currency GHS is GHS 50.00."),
+          cancel_url: z.string().url().optional().describe("Optional URL if the customer abandons checkout."),
+          currency: z.enum(pricingCurrencies).describe("GHS for Ghana wallets, ZMW for Zambia wallets."),
           customer: collectionCustomerSchema,
           description: z.string().min(1).max(500).optional(),
           metadata: metadataSchema.optional(),
-          method: z.enum(["mobile_money", "card"]).optional(),
-          network: z.string().min(1).optional(),
-          phone: z.string().min(4).optional(),
-          reference: z.string().min(1).max(128).optional(),
+          method: z
+            .enum(["mobile_money", "card"])
+            .optional()
+            .describe("Omit when phone is present. Phone implies mobile_money."),
+          network: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Optional. Omit unless you must override prefix detection (MTN, Telecel, AT, Airtel, Zamtel)."),
+          phone: z
+            .string()
+            .min(4)
+            .optional()
+            .describe("E.164, for example +233241230001. In test mode last four 0001 succeed, 0002 fail, 0003 stay pending."),
+          reference: z
+            .string()
+            .min(1)
+            .max(128)
+            .optional()
+            .describe("Your order id. Keep it stable so webhooks match your records."),
           return_url: z.string().url().optional()
         }),
+        description:
+          "Creates a collection. Send Authorization: Bearer rp_test_sk_... and Idempotency-Key on every POST.\n\nRequired JSON: amount (integer minor units), currency (GHS or ZMW), phone (E.164).\nOptional: reference, description, customer { name, email }, network, method, metadata, cancel_url, return_url.\n\nExample request: { \"amount\": 5000, \"currency\": \"GHS\", \"phone\": \"+233241230001\", \"reference\": \"ORDER-1001\" }\n\nExample response: { \"data\": { \"id\": \"col_...\", \"status\": \"processing\", \"amount\": 5000, \"currency\": \"GHS\", \"phone\": \"+233241230001\", \"network\": \"MTN\", \"reference\": \"ORDER-1001\" } }\n\nIn test mode there is no phone prompt. Numbers ending 0001 succeed after a few seconds. Poll GET /v1/collections/:id or wait for collection.successful.",
         response: {
           201: z.object({
             data: collectionResponseSchema
           })
-        }
+        },
+        summary: "Create a collection",
+        tags: ["Collections"]
       }
     },
     async (request, reply) => {
@@ -150,14 +174,18 @@ export async function registerCollectionRoutes(app: FastifyTypedInstance) {
     "/collections/:id",
     {
       schema: {
+        description:
+          "Reads one collection that belongs to the authenticated merchant and key mode. Use this when a webhook was missed. Test-mode 0001 collections move from processing to successful within a few seconds.",
         params: z.object({
-          id: z.string().min(1)
+          id: z.string().min(1).describe("Collection id, for example col_01J...")
         }),
         response: {
           200: z.object({
             data: collectionResponseSchema
           })
-        }
+        },
+        summary: "Retrieve a collection",
+        tags: ["Collections"]
       }
     },
     async (request) => {

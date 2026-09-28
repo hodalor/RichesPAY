@@ -50,13 +50,20 @@ const paymentLinkSessionCreateBodySchema = z.object({
 });
 
 const hostedCheckoutSessionCreateBodySchema = z.object({
-  allowed_methods: z.array(z.enum(checkoutMethods)).min(1),
-  amount: z.coerce.number().int().positive(),
+  allowed_methods: z
+    .array(z.enum(checkoutMethods))
+    .min(1)
+    .describe("Methods the customer may use, for example [\"mobile_money\"] or [\"mobile_money\",\"card\"]."),
+  amount: z.coerce
+    .number()
+    .int()
+    .positive()
+    .describe("Integer minor units. 5000 with currency GHS is GHS 50.00."),
   cancel_url: z.string().url().optional(),
-  currency: z.enum(pricingCurrencies),
+  currency: z.enum(pricingCurrencies).describe("GHS or ZMW."),
   customer: customerSchema,
   description: z.string().max(500).optional(),
-  reference: z.string().min(1).max(128).optional(),
+  reference: z.string().min(1).max(128).optional().describe("Your order id."),
   success_url: z.string().url().optional()
 });
 
@@ -110,6 +117,7 @@ const checkoutSessionResponseSchema = z.object({
     display_name: z.string(),
     id: z.string()
   }),
+  mode: z.enum(["test", "live"]),
   reference: z.string().nullable(),
   status: z.enum(["open", "completed", "expired"]),
   success_url: z.string().nullable()
@@ -140,6 +148,7 @@ export async function registerCheckoutRoutes(app: FastifyTypedInstance) {
               merchant: z.object({
                 display_name: z.string()
               }),
+              mode: z.enum(["test", "live"]),
               reusable: z.boolean(),
               slug: z.string(),
               title: z.string()
@@ -283,6 +292,8 @@ export async function registerCheckoutRoutes(app: FastifyTypedInstance) {
       {
         schema: {
           body: hostedCheckoutSessionCreateBodySchema,
+          description:
+            "Creates a hosted checkout session. Use a public key (rp_test_pk_... or rp_live_pk_...), not a secret key. Redirect the customer to data.url.\n\nExample request: { \"allowed_methods\": [\"mobile_money\"], \"amount\": 5000, \"currency\": \"GHS\", \"description\": \"Order 1001\", \"reference\": \"ORDER-1001\" }\n\nExample response: { \"data\": { \"id\": \"cs_...\", \"url\": \"https://checkout.richespay.com/session/cs_...?key=rp_test_pk_...\" } }\n\nPayment links are created in the dashboard. Customers open /link/{slug}. In test mode there is no phone prompt; use a number ending in 0001.",
           response: {
             201: z.object({
               data: z.object({
@@ -290,7 +301,9 @@ export async function registerCheckoutRoutes(app: FastifyTypedInstance) {
                 url: z.string().url()
               })
             })
-          }
+          },
+          summary: "Create a hosted checkout session",
+          tags: ["Checkout"]
         }
       },
       async (request, reply) => {
@@ -449,6 +462,7 @@ function serializeCheckoutSession(session: CheckoutSessionView) {
       display_name: session.merchant.displayName,
       id: session.merchant.id
     },
+    mode: session.mode,
     reference: session.reference,
     status: session.status,
     success_url: session.successUrl
@@ -464,6 +478,7 @@ function serializePaymentLinkPublic(link: {
   merchant: {
     displayName: string;
   };
+  mode: RpMode;
   reusable: boolean;
   slug: string;
   title: string;
@@ -479,6 +494,7 @@ function serializePaymentLinkPublic(link: {
     merchant: {
       display_name: link.merchant.displayName
     },
+    mode: link.mode,
     reusable: link.reusable,
     slug: link.slug,
     title: link.title

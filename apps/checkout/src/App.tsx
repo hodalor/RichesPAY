@@ -69,6 +69,7 @@ interface CheckoutSessionData {
     display_name: string;
     id: string;
   };
+  mode: "live" | "test";
   reference: string | null;
   status: CheckoutSessionStatus;
   success_url: string | null;
@@ -84,6 +85,7 @@ interface PaymentLinkPublicData {
   merchant: {
     display_name: string;
   };
+  mode: "live" | "test";
   reusable: boolean;
   slug: string;
   title: string;
@@ -471,6 +473,12 @@ function CheckoutScreen({
               </p>
             </header>
 
+            {(effectiveSession?.mode ?? link?.mode) === "test" ? (
+              <div className="mt-6 rounded-2xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-amber-900">
+                Test mode: no real network prompt. Use a number ending in 0001 to succeed, 0002 to fail, or 0003 to stay pending.
+              </div>
+            ) : null}
+
             {displayError ? (
               <div className="mt-6 rounded-2xl border border-danger/20 bg-danger-soft px-4 py-3 text-sm text-danger">
                 {getErrorMessage(displayError)}
@@ -792,12 +800,17 @@ function WaitingPanel({ session }: { session: CheckoutSessionData }) {
       </div>
       <h3 className="mt-5 text-2xl font-semibold text-slate-950">
         {method === "card"
-          ? "Waiting for card authorisation"
-          : "Approve the prompt on your phone"}
+          ? session.mode === "test"
+            ? "Simulator is confirming the card payment"
+            : "Waiting for card authorisation"
+          : session.mode === "test"
+            ? "Simulator is settling this test payment"
+            : "Approve the prompt on your phone"}
       </h3>
       <p className="mt-3 text-sm text-slate-600">
-        We’re checking the payment status every 3 seconds. This screen updates
-        automatically as soon as the provider responds.
+        {session.mode === "test"
+          ? "There is no real phone prompt in test mode. Numbers ending in 0001 succeed in a few seconds, 0002 fail immediately, and 0003 stay pending."
+          : "We’re checking the payment status every 3 seconds. This screen updates automatically as soon as the provider responds."}
       </p>
       <div className="mt-6 rounded-2xl border border-white bg-white/80 p-4 text-left shadow-softer">
         <dl className="space-y-3 text-sm text-slate-600">
