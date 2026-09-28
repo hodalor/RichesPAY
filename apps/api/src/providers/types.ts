@@ -1,8 +1,8 @@
 import type { Json } from "../db/types";
 import type { RpMode } from "../db/types";
 
-export const channelKinds = ["mobile_money", "card", "bank", "sms"] as const;
-export const channelCapabilities = ["collect", "payout", "sms"] as const;
+export const channelKinds = ["mobile_money", "card", "bank", "sms", "airtime"] as const;
+export const channelCapabilities = ["collect", "payout", "sms", "airtime"] as const;
 export const channelStatuses = ["active", "disabled", "maintenance"] as const;
 export const channelHealthStates = ["healthy", "degraded", "down"] as const;
 export const providerOutcomes = ["accepted", "succeeded", "failed", "unknown"] as const;
@@ -123,6 +123,30 @@ export interface SmsMessageRequest {
   context: ProviderOperationContext;
 }
 
+export interface AirtimeSendRequest {
+  amount: number;
+  context: ProviderOperationContext;
+  currency: string;
+  metadata?: Json | null;
+  msisdn: string;
+  network: string;
+  reference: string;
+}
+
+export interface AirtimeNetworkOffer {
+  currency: string;
+  fixedDenominations?: number[] | null;
+  maxMinor?: number | null;
+  minMinor?: number | null;
+  network: string;
+}
+
+export interface AirtimeFloatBalance {
+  balanceMinor: number | null;
+  currency: string | null;
+  rawRedacted: Json | null;
+}
+
 export interface ProviderCallbackVerificationInput {
   headers: Record<string, string | string[] | undefined>;
   ip: string;
@@ -185,6 +209,25 @@ export interface SmsProvider {
   getBalance?(): Promise<ProviderResult>;
   healthCheck(): Promise<ProviderResult>;
 }
+
+/**
+ * `sendAirtime` must return `providerStatus: "not_sent"` only when the request
+ * provably never reached the provider (DNS, refused connection, TLS failure).
+ * That is the only result the caller may fail over on. A timeout or any other
+ * ambiguous transport error is `outcome: "unknown"` and is resolved by polling
+ * `getStatus`, never by resending.
+ */
+export interface AirtimeProvider {
+  listNetworks(countryCode: string): Promise<AirtimeNetworkOffer[]>;
+  sendAirtime(req: AirtimeSendRequest): Promise<ProviderResult>;
+  getStatus(providerRef: string): Promise<ProviderResult>;
+  verifyCallback(input: ProviderCallbackVerificationInput): Promise<boolean> | boolean;
+  parseCallback(rawBody: string): Promise<NormalizedEvent> | NormalizedEvent;
+  getFloatBalance(): Promise<AirtimeFloatBalance>;
+  healthCheck(): Promise<ProviderResult>;
+}
+
+export const airtimeNotSentStatus = "not_sent";
 
 export interface ScreeningProvider {
   screen(input: {

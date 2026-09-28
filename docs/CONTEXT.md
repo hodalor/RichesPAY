@@ -2,9 +2,9 @@
 
 ## Product
 RichesPay is a multi-tenant payment and SMS gateway. Launch countries: Ghana (GH) and Zambia (ZM). Merchants from any country may sign up. RichesPay connects directly to mobile network operators (MNOs).
-Services: collections (mobile money, card), payouts (single and bulk), SMS (single, bulk, OTP), hosted checkout, payment links, public REST API, signed webhooks, merchant dashboard, admin back-office.
+Services: collections (mobile money, card), payouts (single and bulk), SMS (single, bulk, OTP), airtime (single and bulk top-ups), hosted checkout, payment links, public REST API, signed webhooks, merchant dashboard, admin back-office.
 One platform, many tenants. Each merchant is a tenant. RichesPay staff are super admins using a separate admin app.
-Products are switched on per merchant: collections, payouts, sms. A merchant may use any one, any two, or all three. SMS clients may only broadcast from the dashboard, only trigger messages from their own app through the API, or both.
+Products are switched on per merchant: collections, payouts, sms, airtime. A merchant may use any combination of them. SMS clients may only broadcast from the dashboard, only trigger messages from their own app through the API, or both. Airtime merchants send mobile airtime from the dashboard or through the API.
 
 ## Stack
 - Monorepo: pnpm workspaces + Turborepo.
@@ -30,7 +30,7 @@ Products are switched on per merchant: collections, payouts, sms. A merchant may
 11. A merchant has two independent freezes: collections_frozen and payouts_frozen. Check them before every collection and every payout. A suspended merchant can do nothing.
 12. Test mode and live mode are fully separated. Every record has mode = 'test' or 'live'. Test keys only ever reach the simulator provider, never a real MNO.
 13. Store all times as timestamptz in UTC. Display them in the merchant's timezone.
-14. Every product endpoint checks that the product is active for the merchant; otherwise return product_not_enabled. Never build a screen, onboarding step or requirement that assumes a merchant uses every product.
+14. Every product endpoint (collections, payouts, sms, airtime) checks that the product is active for the merchant; otherwise return product_not_enabled. Never build a screen, onboarding step or requirement that assumes a merchant uses every product.
 
 ## Currency rules
 - Settlement currency is fixed at onboarding by country: GH = GHS, ZM = ZMW, any other country = USD. It can never change.
@@ -41,7 +41,7 @@ Products are switched on per merchant: collections, payouts, sms. A merchant may
 ## API design rules
 - Base path /v1. JSON only. snake_case field names.
 - Auth header: Authorization: Bearer <secret key>. Secret keys look like rp_test_sk_... or rp_live_sk_.... Public keys (rp_test_pk_, rp_live_pk_) are only for hosted checkout.
-- Resource IDs are prefixed ULIDs: col_ (collection), pay_ (payout), bat_ (payout batch), sms_ (message), smb_ (SMS batch), lnk_ (payment link), whe_ (webhook endpoint), evt_ (event), cus_ (customer).
+- Resource IDs are prefixed ULIDs: col_ (collection), pay_ (payout), bat_ (payout batch), sms_ (message), smb_ (SMS batch), air_ (airtime order), aib_ (airtime batch), lnk_ (payment link), whe_ (webhook endpoint), evt_ (event), cus_ (customer).
 - Success response: { "data": ..., "meta": {...} }. Error response: { "error": { "code", "message", "field", "request_id" } }.
 - Cursor pagination: ?limit=20&starting_after=<id>.
 - Amount fields: "amount": 1500, "currency": "GHS" means GHS 15.00.
@@ -60,6 +60,7 @@ Products are switched on per merchant: collections, payouts, sms. A merchant may
 - Ghana mobile money: MTN MoMo, Telecel Cash, AT Money.
 - Zambia mobile money: MTN MoMo, Airtel Money, Zamtel mobile money.
 - SMS: direct MNO routes (SMPP or HTTP). Several routes per country with failover.
+- Airtime: direct MNO airtime vending. Ghana: MTN, Telecel, AT. Zambia: MTN, Airtel, Zamtel. An optional aggregator channel acts as backup.
 - Cards: one generic card-acquirer adapter interface. Hosted fields or redirect plus 3-D Secure. RichesPay never stores card numbers.
 
 ## Definition of done for every task

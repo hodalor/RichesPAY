@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-28
+- Allowed PUT, PATCH and DELETE on CORS preflight so the admin app can save merchant products and limits, and stopped the merchant Airtime tab from crashing when settlement currency is not ready yet.
+- Published airtime for integrators: OpenAPI descriptions and examples on `/v1/airtime`, a docs guide with cURL/Node/PHP/Python tabs, updates to test mode, errors, webhooks, countries, authentication and changelog, `@richespay/node` 0.1.0 with `airtime` and `airtimeBatches` helpers, and a Developers quick-start cURL for the 0001 test number.
+- Extended the admin app with airtime staff controls: Networks, Discount plans (defaults and audited merchant overrides), Float with history and low-threshold highlighting, global order search, merchant Airtime tab and limits, overview volume plus a low-float banner, and airtime velocity flags in the compliance queue.
+- Added airtime to the merchant dashboard: product card on sign-up and Settings, sidebar item when active, list page with quotes, bulk preview, batches, CSV export, and an overview checklist for the first test top-up.
+- Replaced the public `/v1/openapi.pdf` dump with an A4 merchant guide: one curl snippet per product plus webhook handling. Provider integration stays out of that PDF.
+- Added airtime as a fourth product: merchants send single or bulk mobile top-ups in the recipient's local currency and are charged in their settlement currency after the network discount and FX conversion.
+- Added airtime channels (`mtn_airtime`, `telecel_airtime`, `at_airtime`, `airtel_airtime`, `zamtel_airtime`, `airtime_aggregator`) plus simulator suffixes, ledger holds, float monitoring every 5 minutes, and public, dashboard and admin APIs.
+- Added production observability: OpenTelemetry trace export, Prometheus metrics for requests, latency, channel outcomes, queues, webhooks, SMS delivery and ledger checks, and Sentry error capture with card, phone, email and secret scrubbing.
+- Added alert signals for a channel outage, a success-rate drop of more than 10 points in 15 minutes, queue backlog, ledger mismatches, open reconciliation exceptions, disabled webhook endpoints, and low provider float. Rules live in `ops/prometheus/alerts.yml`.
+- Added a public status page at `/status` and JSON at `/v1/status` for Ghana and Zambia channels.
+- Added API and worker Dockerfiles, static image builds for dashboard, admin, checkout and docs, a rolling restart script, and a GitHub Actions release that verifies, migrates, deploys staging, waits for production approval, then deploys production.
+- Documented separate dev, staging and production Supabase, Redis and secret sets, operator egress and VPN setup, and the go-live checklist.
+
 ## 2026-09-27
 - Simplified the public `/v1` API by allowing collections, payouts, and checkout payments to infer `method=mobile_money` from `phone`, seeding MSISDN network prefixes so `network` can be omitted and auto-detected, and exposing the inferred `phone` and `network` back on checkout session payment responses.
 - Added a new white `apps/docs` site with RichesPay guides, four-language runnable examples, an embedded `/v1/openapi.json` API reference, the requested quick-start curl example, and a public changelog page.

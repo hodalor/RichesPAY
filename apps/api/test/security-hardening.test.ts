@@ -310,6 +310,22 @@ describe("security hardening", () => {
     expect(files.every((file) => file.includes("Content-Security-Policy"))).toBe(true);
   });
 
+  it("allows PUT preflight from the admin origin", async () => {
+    const response = await builtApp.app.inject({
+      headers: {
+        "access-control-request-headers": "authorization,content-type",
+        "access-control-request-method": "PUT",
+        origin: "http://127.0.0.1:5174"
+      },
+      method: "OPTIONS",
+      url: "/admin/v1/merchants/mer_security_test/products"
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(String(response.headers["access-control-allow-methods"])).toContain("PUT");
+    expect(response.headers["access-control-allow-origin"]).toBe("http://127.0.0.1:5174");
+  });
+
   async function waitForRequestLog(merchantId: string) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const row = await builtApp.db

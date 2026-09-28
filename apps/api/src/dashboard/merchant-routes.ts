@@ -215,7 +215,8 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
             "merchant_available",
             "merchant_pending",
             "merchant_reserve",
-            "merchant_payout_hold"
+            "merchant_payout_hold",
+            "merchant_airtime_hold"
           ])
           .execute();
 
@@ -308,8 +309,43 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
             .selectFrom("collections")
             .select(sql<number>`count(*)`.as("count"))
             .where("status", "=", "successful")
+            .executeTakeFirstOrThrow(),
+          trx
+            .selectFrom("airtime_orders")
+            .select(sql<number>`count(*)`.as("count"))
+            .where("mode", "=", membership.mode)
             .executeTakeFirstOrThrow()
         ]);
+
+        const airtimeToday = await trx
+          .selectFrom("airtime_orders")
+          .select([
+            sql<number>`count(*)`.as("sent"),
+            sql<number>`count(*) filter (where status = 'successful')`.as("successful"),
+            sql<string>`coalesce(sum(charge_amount) filter (where status = 'successful'), 0)::text`.as(
+              "spend_minor"
+            )
+          ])
+          .where("merchant_id", "=", membership.merchantId)
+          .where("mode", "=", membership.mode)
+          .where("created_at", ">=", new Date(new Date().toISOString().slice(0, 10)))
+          .executeTakeFirstOrThrow();
+
+        const airtimeMonth = await trx
+          .selectFrom("airtime_orders")
+          .select(
+            sql<string>`coalesce(sum(charge_amount) filter (where status = 'successful'), 0)::text`.as(
+              "spend_minor"
+            )
+          )
+          .where("merchant_id", "=", membership.merchantId)
+          .where("mode", "=", membership.mode)
+          .where(
+            "created_at",
+            ">=",
+            new Date(`${new Date().toISOString().slice(0, 7)}-01T00:00:00.000Z`)
+          )
+          .executeTakeFirstOrThrow();
 
         const recentCollections = await trx
           .selectFrom("collections")
@@ -353,13 +389,22 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
           .limit(4)
           .execute();
 
+        const recentAirtime = membership.activeProducts.airtime
+          ? await trx
+              .selectFrom("airtime_orders")
+              .select(["id", "created_at", "reference", "charge_amount", "charge_currency", "status"])
+              .orderBy("created_at", "desc")
+              .limit(4)
+              .execute()
+          : [];
+
         const recentTransactions = [
           ...recentCollections.map((row) => ({
             amount_minor: Number(bigintFromUnknown(row.amount)),
             created_at: row.created_at.toISOString(),
             currency: row.currency,
             id: row.id,
-            kind: "collection",
+            kind: "collection" as const,
             reference: row.reference,
             status: row.status
           })),
@@ -368,7 +413,7 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
             created_at: row.created_at.toISOString(),
             currency: row.currency,
             id: row.id,
-            kind: "payout",
+            kind: "payout" as const,
             reference: row.reference,
             status: row.status
           })),
@@ -377,7 +422,16 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
             created_at: row.created_at.toISOString(),
             currency: row.currency,
             id: row.id,
-            kind: "sms",
+            kind: "sms" as const,
+            reference: row.reference,
+            status: row.status
+          })),
+          ...recentAirtime.map((row) => ({
+            amount_minor: Number(bigintFromUnknown(row.charge_amount)),
+            created_at: row.created_at.toISOString(),
+            currency: row.charge_currency,
+            id: row.id,
+            kind: "airtime" as const,
             reference: row.reference,
             status: row.status
           }))
@@ -390,11 +444,21 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
         );
 
         return {
-          active_products: membership.activeProducts,
+          active_products: {
+            airtime: membership.activeProducts.airtime,
+            collections: membership.activeProducts.collections,
+            payouts: membership.activeProducts.payouts,
+            sms: membership.activeProducts.sms,
+            sms_api: membership.activeProducts.smsApi,
+            sms_broadcast: membership.activeProducts.smsBroadcast
+          },
           balance: {
             available_minor: Number(balanceByType.get("merchant_available") ?? 0n),
             currency: membership.settlementCurrency,
-            on_hold_minor: Number(balanceByType.get("merchant_payout_hold") ?? 0n),
+            on_hold_minor: Number(
+              (balanceByType.get("merchant_payout_hold") ?? 0n) +
+                (balanceByType.get("merchant_airtime_hold") ?? 0n)
+            ),
             pending_minor: Number(balanceByType.get("merchant_pending") ?? 0n),
             reserve_minor: Number(balanceByType.get("merchant_reserve") ?? 0n)
           },
@@ -413,6 +477,14 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
           },
           overview: {
             cards: {
+              airtime_sent_today: Number(airtimeToday.sent),
+              airtime_spend_this_month_minor: Number(
+                bigintFromUnknown(airtimeMonth.spend_minor)
+              ),
+              airtime_success_rate: percentage(
+                Number(airtimeToday.successful),
+                Number(airtimeToday.sent)
+              ),
               available_balance_minor: Number(balanceByType.get("merchant_available") ?? 0n),
               collected_today_minor: Number(
                 bigintFromUnknown(todayStats?.collections_amount_minor ?? 0)
@@ -442,11 +514,24 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
                 key: "api_key",
                 label: "Create API key"
               },
-              {
-                complete: checklistCounts[3].count > 0,
-                key: "first_payment",
-                label: "First test payment"
-              }
+              ...(membership.activeProducts.collections
+                ? [
+                    {
+                      complete: checklistCounts[3].count > 0,
+                      key: "first_payment",
+                      label: "First test payment"
+                    }
+                  ]
+                : []),
+              ...(membership.activeProducts.airtime
+                ? [
+                    {
+                      complete: checklistCounts[4].count > 0,
+                      key: "first_airtime",
+                      label: "Send your first test airtime"
+                    }
+                  ]
+                : [])
             ],
             recent_transactions: recentTransactions
           },
@@ -1132,7 +1217,8 @@ export async function registerMerchantDashboardRoutes(app: FastifyTypedInstance)
             "merchant_available",
             "merchant_pending",
             "merchant_reserve",
-            "merchant_payout_hold"
+            "merchant_payout_hold",
+            "merchant_airtime_hold"
           ])
           .orderBy("account.currency")
           .execute()

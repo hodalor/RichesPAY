@@ -1,6 +1,10 @@
 import { createHmac } from "node:crypto";
 
 import type {
+  AirtimeFloatBalance,
+  AirtimeNetworkOffer,
+  AirtimeProvider,
+  AirtimeSendRequest,
   BankPayoutProvider,
   BankPayoutRequest,
   CardAcquirer,
@@ -501,6 +505,131 @@ export class SimulatorSmsProvider implements SmsProvider {
       }
     };
   }
+}
+
+type SimulatorAirtimeScenario =
+  | "invalid_phone_number"
+  | "pending_then_success"
+  | "succeeded"
+  | "timeout_then_success"
+  | "unavailable";
+
+/**
+ * Test numbers: ...0001 succeeds, ...0002 fails with invalid_phone_number,
+ * ...0003 stays pending until a status check, ...0004 fails with
+ * airtime_unavailable, ...0005 times out (unknown) and succeeds on status check.
+ */
+export class SimulatorAirtimeProvider implements AirtimeProvider {
+  async listNetworks(countryCode: string): Promise<AirtimeNetworkOffer[]> {
+    return countryCode.toUpperCase() === "ZM"
+      ? [
+          { currency: "ZMW", network: "MTN" },
+          { currency: "ZMW", network: "AIRTEL" },
+          { currency: "ZMW", network: "ZAMTEL" }
+        ]
+      : [
+          { currency: "GHS", network: "MTN" },
+          { currency: "GHS", network: "TELECEL" },
+          { currency: "GHS", network: "AT" }
+        ];
+  }
+
+  async sendAirtime(req: AirtimeSendRequest): Promise<ProviderResult> {
+    const scenario = getSimulatorAirtimeScenario(req.msisdn);
+    const providerRef = `sim_air_${scenario}_${req.reference}`;
+    const raw = { provider_ref: providerRef, reference: req.reference, scenario };
+
+    switch (scenario) {
+      case "invalid_phone_number":
+        return {
+          failureCode: "invalid_phone_number",
+          outcome: "failed",
+          providerRef,
+          providerStatus: "invalid_msisdn",
+          rawRedacted: raw
+        };
+      case "unavailable":
+        return {
+          failureCode: "airtime_unavailable",
+          outcome: "failed",
+          providerRef,
+          providerStatus: "airtime_unavailable",
+          rawRedacted: raw
+        };
+      case "pending_then_success":
+        return { outcome: "accepted", providerRef, providerStatus: "pending", rawRedacted: raw };
+      case "timeout_then_success":
+        return { outcome: "unknown", providerRef, providerStatus: "timeout", rawRedacted: raw };
+      case "succeeded":
+        return successResult(providerRef, "successful", raw);
+    }
+  }
+
+  async getStatus(providerRef: string): Promise<ProviderResult> {
+    if (providerRef.startsWith("sim_air_invalid_phone_number_")) {
+      return {
+        failureCode: "invalid_phone_number",
+        outcome: "failed",
+        providerRef,
+        providerStatus: "invalid_msisdn",
+        rawRedacted: { provider_ref: providerRef }
+      };
+    }
+
+    if (providerRef.startsWith("sim_air_unavailable_")) {
+      return {
+        failureCode: "airtime_unavailable",
+        outcome: "failed",
+        providerRef,
+        providerStatus: "airtime_unavailable",
+        rawRedacted: { provider_ref: providerRef }
+      };
+    }
+
+    return successResult(providerRef, "successful", { provider_ref: providerRef });
+  }
+
+  async getFloatBalance(): Promise<AirtimeFloatBalance> {
+    return {
+      balanceMinor: 100_000_000,
+      currency: null,
+      rawRedacted: { provider: "simulator" }
+    };
+  }
+
+  async healthCheck(): Promise<ProviderResult> {
+    return successResult("simulator_airtime", "healthy", { provider: "simulator" });
+  }
+
+  async parseCallback(rawBody: string): Promise<NormalizedEvent> {
+    return parseSimulatorBody(rawBody);
+  }
+
+  verifyCallback(input: ProviderCallbackVerificationInput): boolean {
+    return verifySimulatorCallback(input);
+  }
+}
+
+function getSimulatorAirtimeScenario(msisdn: string): SimulatorAirtimeScenario {
+  const digits = msisdn.replace(/[^\d]/g, "");
+
+  if (digits.endsWith("0002")) {
+    return "invalid_phone_number";
+  }
+
+  if (digits.endsWith("0003")) {
+    return "pending_then_success";
+  }
+
+  if (digits.endsWith("0004")) {
+    return "unavailable";
+  }
+
+  if (digits.endsWith("0005")) {
+    return "timeout_then_success";
+  }
+
+  return "succeeded";
 }
 
 function stringOrUndefined(value: unknown): string | undefined {

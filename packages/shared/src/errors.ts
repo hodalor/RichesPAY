@@ -4,6 +4,14 @@ export interface ErrorDefinition {
 }
 
 export const ERROR_CATALOG = {
+  airtime_unavailable: {
+    message: "Airtime is temporarily unavailable for this network.",
+    status: 503
+  },
+  amount_not_allowed: {
+    message: "The amount is not allowed for this network.",
+    status: 400
+  },
   amount_too_large: {
     message: "The amount is above the allowed limit.",
     status: 400
@@ -55,6 +63,10 @@ export const ERROR_CATALOG = {
   mfa_required: {
     message: "A multi-factor authentication step is required.",
     status: 403
+  },
+  network_not_supported: {
+    message: "This mobile network is not supported.",
+    status: 400
   },
   not_found: {
     message: "The requested resource was not found.",

@@ -14,9 +14,12 @@ import type { AuthenticatedSession } from "./session";
 
 export interface DashboardMembershipContext {
   activeProducts: {
+    airtime: boolean;
     collections: boolean;
     payouts: boolean;
     sms: boolean;
+    smsApi: boolean;
+    smsBroadcast: boolean;
   };
   merchantId: string;
   merchantName: string;
@@ -48,6 +51,7 @@ export async function resolveDashboardMembership(
               .onRef("products.mode", "=", "membership.mode")
           )
           .select([
+            "products.airtime_enabled as airtimeEnabled",
             "products.collections_enabled as collectionsEnabled",
             "membership.merchant_id as merchantId",
             "membership.mode as mode",
@@ -57,6 +61,8 @@ export async function resolveDashboardMembership(
             "products.payouts_enabled as payoutsEnabled",
             "merchant.settlement_currency as settlementCurrency",
             "merchant.status as merchantStatus",
+            "products.sms_api_enabled as smsApiEnabled",
+            "products.sms_broadcast_enabled as smsBroadcastEnabled",
             "products.sms_enabled as smsEnabled",
             "merchant.timezone as timezone"
           ])
@@ -68,9 +74,12 @@ export async function resolveDashboardMembership(
     if (membership) {
       return {
         activeProducts: {
+          airtime: membership.airtimeEnabled ?? false,
           collections: membership.collectionsEnabled ?? true,
           payouts: membership.payoutsEnabled ?? true,
-          sms: membership.smsEnabled ?? true
+          sms: membership.smsEnabled ?? true,
+          smsApi: membership.smsApiEnabled ?? membership.smsEnabled ?? false,
+          smsBroadcast: membership.smsBroadcastEnabled ?? membership.smsEnabled ?? false
         },
         merchantId: membership.merchantId,
         merchantName: membership.merchantName,

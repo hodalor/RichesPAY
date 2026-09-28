@@ -141,7 +141,8 @@ const guides: GuideDefinition[] = [
         bullets: [
           "Send every secret key in Authorization: Bearer <key>.",
           "Keep keys server-side.",
-          "Use separate test and live credentials."
+          "Use separate test and live credentials.",
+          "Airtime writes need a key with the airtime scope. Otherwise the API returns permission_denied or product_not_enabled."
         ],
         example: {
           title: "Read your balance",
@@ -198,7 +199,8 @@ const guides: GuideDefinition[] = [
         title: "Use simulator destinations",
         paragraphs: [
           "Phone numbers ending in 0001 succeed, 0002 fail immediately, and 0003 stay pending until later resolution.",
-          "Card numbers 4000000000000001, 4000000000000002, and 4000000000000003 cover success, decline, and 3-D Secure."
+          "Card numbers 4000000000000001, 4000000000000002, and 4000000000000003 cover success, decline, and 3-D Secure.",
+          "Airtime uses the same last-four shortcuts on the recipient number: 0001 succeeds, 0002 fails as invalid_phone_number, 0003 stays pending then succeeds, 0004 fails as airtime_unavailable, and 0005 times out, stays processing, and is never resent."
         ],
         example: {
           title: "Trigger a successful test collection",
@@ -690,6 +692,200 @@ const guides: GuideDefinition[] = [
     ]
   },
   {
+    slug: "airtime-and-bulk-airtime",
+    summary: "Send mobile airtime as a face-value top-up. The recipient is charged in the phone's local currency. You pay face value minus the network discount, converted into your settlement currency when those currencies differ.",
+    title: "Airtime and bulk airtime",
+    sections: [
+      {
+        title: "What it does",
+        paragraphs: [
+          "Airtime is a product. The API key needs the airtime scope, and the merchant must have airtime enabled. Otherwise the API returns product_not_enabled.",
+          "Every POST requires an Idempotency-Key header. The Node SDK generates one when you do not pass it.",
+          "Checks run in this order: merchant active, airtime product active, valid number, network supported, amount allowed, available balance, per-number daily limits."
+        ]
+      },
+      {
+        title: "Send to one number",
+        paragraphs: [
+          "amount is the face value in minor units. 1000 is ZMW 10.00. charge_amount is what you pay after the discount.",
+          "network is optional. When omitted, RichesPay detects it from the phone number."
+        ],
+        example: httpExample({
+          title: "Send a test top-up",
+          description: "Use a number ending in 0001 in test mode. The order starts pending and the signed webhook is the source of truth.",
+          path: "/v1/airtime",
+          idempotencyKey: "reward-221",
+          body: {
+            phone: "+260970000001",
+            amount: 1000,
+            currency: "ZMW",
+            reference: "REWARD-221"
+          },
+          node: `
+            import { RichesPay } from "@richespay/node";
+
+            const richespay = new RichesPay("${testSecretKey}");
+            const order = await richespay.airtime.send({
+              phone: "+260970000001",
+              amount: 1000,
+              currency: "ZMW",
+              reference: "REWARD-221"
+            });
+
+            console.log(order.id, order.charge_amount, order.status);
+          `
+        })
+      },
+      {
+        title: "Bulk: same amount to many numbers",
+        paragraphs: [
+          "Send phones[] plus one amount. A batch accepts at most 5,000 recipients.",
+          "The response is a batch (aib_...) with accepted, rejected, and rejected_rows (index, phone, code, message)."
+        ],
+        example: httpExample({
+          title: "Send one amount to many phones",
+          description: "Every accepted row becomes its own air_ order inside the batch.",
+          path: "/v1/airtime/bulk",
+          idempotencyKey: "rewards-sep",
+          body: {
+            phones: ["+260970000001", "+260960000001"],
+            amount: 1000,
+            currency: "ZMW"
+          },
+          node: `
+            import { RichesPay } from "@richespay/node";
+
+            const richespay = new RichesPay("${testSecretKey}");
+            const batch = await richespay.airtime.bulk({
+              phones: ["+260970000001", "+260960000001"],
+              amount: 1000,
+              currency: "ZMW"
+            }, {
+              idempotencyKey: "rewards-sep"
+            });
+
+            console.log(batch.id, batch.accepted, batch.rejected_rows);
+          `
+        })
+      },
+      {
+        title: "Bulk: different amounts per row",
+        paragraphs: [
+          "Send items[] when each recipient needs its own face value.",
+          "Do not send items and phones in the same request."
+        ],
+        example: httpExample({
+          title: "Send mixed face values",
+          description: "Each item can also set its own network or reference.",
+          path: "/v1/airtime/bulk",
+          idempotencyKey: "rewards-mixed",
+          body: {
+            items: [
+              { phone: "+260970000001", amount: 1000, currency: "ZMW" },
+              { phone: "+260960000001", amount: 2000, currency: "ZMW" }
+            ]
+          },
+          node: `
+            import { RichesPay } from "@richespay/node";
+
+            const richespay = new RichesPay("${testSecretKey}");
+            const batch = await richespay.airtime.bulk({
+              items: [
+                { phone: "+260970000001", amount: 1000, currency: "ZMW" },
+                { phone: "+260960000001", amount: 2000, currency: "ZMW" }
+              ]
+            }, {
+              idempotencyKey: "rewards-mixed"
+            });
+
+            console.log(batch.total_charge);
+          `
+        })
+      },
+      {
+        title: "Check status",
+        paragraphs: [
+          "Statuses are pending, processing, successful, and failed.",
+          "GET /v1/airtime/:id reads one order. GET /v1/airtime lists with status, phone, batch_id, created_gte, created_lte, and cursor pagination. GET /v1/airtime/batches/:id reads the bulk run."
+        ],
+        example: httpExample({
+          title: "Retrieve an order",
+          description: "If a webhook is missed, treat this status the same way you would treat the event.",
+          path: "/v1/airtime/air_01J...",
+          node: `
+            import { RichesPay } from "@richespay/node";
+
+            const richespay = new RichesPay("${testSecretKey}");
+            const order = await richespay.airtime.retrieve("air_01J...");
+            const page = await richespay.airtime.list({ status: "successful", limit: 20 });
+            const batch = await richespay.airtimeBatches.retrieve("aib_01J...");
+
+            console.log(order.status, page.meta.has_more, batch.successful);
+          `
+        })
+      },
+      {
+        title: "Webhooks",
+        paragraphs: [
+          "Signed events: airtime.successful, airtime.failed, and airtime_batch.completed.",
+          "Verify RichesPay-Signature on the raw body before you parse JSON. Fulfil on success and stop on failure."
+        ]
+      },
+      {
+        title: "Networks and allowed amounts",
+        paragraphs: [
+          "Ghana sells MTN, Telecel, and AT. Zambia sells MTN, Airtel, and Zamtel.",
+          "Each network has a min, a max, and optional fixed denominations. Amounts outside that set return amount_not_allowed."
+        ],
+        example: httpExample({
+          title: "List sellable networks",
+          description: "discount_bps is the merchant discount for that network.",
+          path: "/v1/airtime/networks?country=ZM",
+          node: `
+            import { RichesPay } from "@richespay/node";
+
+            const richespay = new RichesPay("${testSecretKey}");
+            const networks = await richespay.airtime.networks({ country: "ZM" });
+
+            console.log(networks[0]?.min_amount, networks[0]?.discount_bps);
+          `
+        })
+      },
+      {
+        title: "How you are charged",
+        paragraphs: [
+          "The recipient always gets the face value in the phone's local currency.",
+          "You pay face value minus the network discount. When that currency differs from your settlement currency, RichesPay converts with the current FX rate and stores fx_rate_id on the order."
+        ],
+        example: httpExample({
+          title: "Quote the merchant charge",
+          description: "Quote before you send so you can show charge_amount in the settlement currency.",
+          path: "/v1/airtime/quote?phone=%2B260970000001&amount=1000&currency=ZMW",
+          node: `
+            import { RichesPay } from "@richespay/node";
+
+            const richespay = new RichesPay("${testSecretKey}");
+            const quote = await richespay.airtime.quote({
+              phone: "+260970000001",
+              amount: 1000,
+              currency: "ZMW"
+            });
+
+            console.log(quote.charge_amount, quote.charge_currency, quote.fx_rate_id);
+          `
+        })
+      },
+      {
+        title: "Errors",
+        paragraphs: [
+          "product_not_enabled when airtime is off. invalid_phone_number when the MSISDN is not a valid mobile number.",
+          "network_not_supported when the detected or requested network is not sold. amount_not_allowed when the face value is outside min/max or not a fixed denomination.",
+          "insufficient_funds when available balance cannot cover charge_amount. airtime_unavailable when no channel with float can accept the order."
+        ]
+      }
+    ]
+  },
+  {
     slug: "otp",
     summary: "OTP uses the same SMS product but gives you a short send and verify pair with attempt limits.",
     title: "OTP",
@@ -875,7 +1071,8 @@ const guides: GuideDefinition[] = [
         title: "Verify the signature header",
         paragraphs: [
           "RichesPay signs the raw request body with t=<unix>,v1=<hex hmac>.",
-          "Use your endpoint secret exactly once when the endpoint is created or rolled."
+          "Use your endpoint secret exactly once when the endpoint is created or rolled.",
+          "Airtime events are airtime.successful, airtime.failed, and airtime_batch.completed. Fulfil on success, stop on failure, and treat a completed batch as the bulk run finishing."
         ],
         example: {
           title: "Verify a webhook signature",
@@ -951,7 +1148,8 @@ const guides: GuideDefinition[] = [
         title: "Read the error envelope",
         paragraphs: [
           "The HTTP status tells you the class of problem.",
-          "The error.code is the stable machine-readable value to branch on."
+          "The error.code is the stable machine-readable value to branch on.",
+          "Airtime adds amount_not_allowed when the face value is outside the network min/max or not a fixed denomination, network_not_supported when the phone's network is not sold, and airtime_unavailable when no channel with float can accept the order."
         ],
         example: {
           title: "Authentication failure example",
@@ -1162,7 +1360,8 @@ const guides: GuideDefinition[] = [
         title: "Know the operating rails",
         paragraphs: [
           "Ghana settles in GHS. Zambia settles in ZMW. Other merchant home countries settle in USD.",
-          "Mobile money uses the local currency of the wallet country, while card presentment can differ from settlement."
+          "Mobile money uses the local currency of the wallet country, while card presentment can differ from settlement.",
+          "Airtime face value is always in the recipient phone's local currency. Ghana sells MTN, Telecel, and AT. Zambia sells MTN, Airtel, and Zamtel."
         ],
         example: {
           title: "Quote a collection fee",
@@ -1224,11 +1423,13 @@ const navigationItems = [
 
 const countryRows = [
   {
+    airtime: "MTN, Telecel, AT",
     country: "Ghana",
     currency: "GHS",
     networks: "MTN MoMo, Telecel Cash, AT Money"
   },
   {
+    airtime: "MTN, Airtel, Zamtel",
     country: "Zambia",
     currency: "ZMW",
     networks: "MTN MoMo, Airtel Money, Zamtel mobile money"
@@ -1280,6 +1481,31 @@ const magicNumberRows = [
     description: "SMS rejected.",
     kind: "SMS destination",
     value: "0003"
+  },
+  {
+    description: "Airtime successful.",
+    kind: "Airtime destination",
+    value: "0001"
+  },
+  {
+    description: "Airtime fails with invalid_phone_number.",
+    kind: "Airtime destination",
+    value: "0002"
+  },
+  {
+    description: "Airtime stays pending, then succeeds on status check.",
+    kind: "Airtime destination",
+    value: "0003"
+  },
+  {
+    description: "Airtime fails with airtime_unavailable.",
+    kind: "Airtime destination",
+    value: "0004"
+  },
+  {
+    description: "Airtime times out, stays processing, and is never resent.",
+    kind: "Airtime destination",
+    value: "0005"
   }
 ];
 
@@ -1596,6 +1822,7 @@ function CountriesTable() {
               <th className="px-3 py-2 font-medium">Country</th>
               <th className="px-3 py-2 font-medium">Settlement currency</th>
               <th className="px-3 py-2 font-medium">Mobile money networks</th>
+              <th className="px-3 py-2 font-medium">Airtime networks</th>
             </tr>
           </thead>
           <tbody>
@@ -1604,6 +1831,7 @@ function CountriesTable() {
                 <td className="px-3 py-3 text-text">{row.country}</td>
                 <td className="px-3 py-3 text-text">{row.currency}</td>
                 <td className="px-3 py-3 text-text-secondary">{row.networks}</td>
+                <td className="px-3 py-3 text-text-secondary">{row.airtime}</td>
               </tr>
             ))}
           </tbody>
@@ -1670,4 +1898,104 @@ function trimCode(value: string) {
   );
 
   return lines.map((line) => line.slice(indent)).join("\n").trim();
+}
+
+function httpExample(input: {
+  body?: Record<string, unknown>;
+  description: string;
+  idempotencyKey?: string;
+  node: string;
+  path: string;
+  title: string;
+}): ExampleDefinition {
+  const url = `${apiOrigin}${input.path}`;
+  const headers = [
+    `Authorization: Bearer ${testSecretKey}`,
+    ...(input.body ? ["Content-Type: application/json"] : []),
+    ...(input.idempotencyKey ? [`Idempotency-Key: ${input.idempotencyKey}`] : [])
+  ];
+  const payload = input.body ? JSON.stringify(input.body) : null;
+  const curlParts = [`curl "${url}"`, ...headers.map((header) => `  -H "${header}"`)];
+  if (payload) {
+    curlParts.push(`  -d '${payload}'`);
+  }
+
+  return {
+    title: input.title,
+    description: input.description,
+    snippets: {
+      curl: curlParts.map((line, index) => (index < curlParts.length - 1 ? `${line} \\` : line)).join("\n"),
+      node: trimCode(input.node),
+      php: payload
+        ? trimCode(`
+            <?php
+
+            $payload = json_encode(${phpLiteral(input.body ?? {})});
+
+            $ch = curl_init("${url}");
+            curl_setopt_array($ch, [
+              CURLOPT_POST => true,
+              CURLOPT_POSTFIELDS => $payload,
+              CURLOPT_RETURNTRANSFER => true,
+              CURLOPT_HTTPHEADER => [
+                ${headers.map((header) => `"${header}"`).join(",\n                ")}
+              ]
+            ]);
+
+            echo curl_exec($ch);
+          `)
+        : trimCode(`
+            <?php
+
+            $ch = curl_init("${url}");
+            curl_setopt_array($ch, [
+              CURLOPT_RETURNTRANSFER => true,
+              CURLOPT_HTTPHEADER => [
+                ${headers.map((header) => `"${header}"`).join(",\n                ")}
+              ]
+            ]);
+
+            echo curl_exec($ch);
+          `),
+      python: payload
+        ? trimCode(`
+            import json
+            from urllib import request
+
+            payload = json.dumps(${JSON.stringify(input.body, null, 4)}).encode()
+
+            req = request.Request(
+                "${url}",
+                data=payload,
+                headers={
+                    ${headers.map((header) => {
+                      const [key, ...rest] = header.split(": ");
+                      return `"${key}": "${rest.join(": ")}"`;
+                    }).join(",\n                    ")}
+                },
+                method="POST",
+            )
+
+            print(request.urlopen(req).read().decode())
+          `)
+        : trimCode(`
+            from urllib import request
+
+            req = request.Request(
+                "${url}",
+                headers={"Authorization": "Bearer ${testSecretKey}"},
+                method="GET",
+            )
+
+            print(request.urlopen(req).read().decode())
+          `)
+    }
+  };
+}
+
+function phpLiteral(value: Record<string, unknown>): string {
+  return JSON.stringify(value, null, 2)
+    .replace(/\{/g, "[")
+    .replace(/\}/g, "]")
+    .replace(/"([^"]+)":/g, '"$1" =>');
 }

@@ -1,8 +1,12 @@
 import { z } from "zod";
 
+import { newId } from "@richespay/shared";
+
+import { createSupabaseServiceClient } from "../auth/supabase-client";
 import { runAdminSystemWrite } from "../auth/admin-access";
-import { runWithSystemScope } from "../db";
+import { runWithSystemScope, type ScopedTransaction } from "../db";
 import type { Json, KybProfileStatus } from "../db/types";
+import { ApiRouteError } from "../lib/api-error";
 import type { FastifyTypedInstance } from "../types";
 
 const modeSchema = z.enum(["test", "live"]);
@@ -93,6 +97,98 @@ function serializeKybStatus(
   }
 }
 
+async function provisionLiveMerchant(trx: ScopedTransaction, testMerchantId: string) {
+  const source = await trx
+    .selectFrom("merchants")
+    .selectAll()
+    .where("id", "=", testMerchantId)
+    .where("mode", "=", "test")
+    .executeTakeFirst();
+
+  if (!source) {
+    return;
+  }
+
+  const existingLive = await trx
+    .selectFrom("merchants")
+    .select("id")
+    .where("legal_name", "=", source.legal_name)
+    .where("country_code", "=", source.country_code)
+    .where("mode", "=", "live")
+    .executeTakeFirst();
+
+  if (existingLive) {
+    return;
+  }
+
+  const liveId = newId("mer_");
+  const now = new Date();
+
+  await trx
+    .insertInto("merchants")
+    .values({
+      collections_freeze_reason: source.collections_freeze_reason,
+      collections_frozen: source.collections_frozen,
+      country_code: source.country_code,
+      created_at: now,
+      id: liveId,
+      legal_name: source.legal_name,
+      mode: "live",
+      payouts_freeze_reason: source.payouts_freeze_reason,
+      payouts_frozen: source.payouts_frozen,
+      settlement_currency: source.settlement_currency,
+      status: "active",
+      support_email: source.support_email,
+      support_phone: source.support_phone,
+      timezone: source.timezone,
+      trading_name: source.trading_name,
+      updated_at: now,
+      website: source.website
+    })
+    .execute();
+
+  const memberships = await trx
+    .selectFrom("memberships")
+    .select(["role", "user_id"])
+    .where("merchant_id", "=", testMerchantId)
+    .execute();
+
+  if (memberships.length > 0) {
+    await trx
+      .insertInto("memberships")
+      .values(
+        memberships.map((membership) => ({
+          merchant_id: liveId,
+          mode: "live" as const,
+          role: membership.role,
+          user_id: membership.user_id
+        }))
+      )
+      .execute();
+  }
+
+  const products = await trx
+    .selectFrom("merchant_products")
+    .selectAll()
+    .where("merchant_id", "=", testMerchantId)
+    .where("mode", "=", "test")
+    .executeTakeFirst();
+
+  await trx
+    .insertInto("merchant_products")
+    .values({
+      airtime_enabled: products?.airtime_enabled ?? false,
+      collections_enabled: products?.collections_enabled ?? false,
+      merchant_id: liveId,
+      mode: "live",
+      payouts_enabled: products?.payouts_enabled ?? false,
+      sms_api_enabled: products?.sms_api_enabled ?? false,
+      sms_broadcast_enabled: products?.sms_broadcast_enabled ?? false,
+      sms_enabled: products?.sms_enabled ?? false
+    })
+    .execute();
+}
+
 export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
   app.get(
     "/overview",
@@ -107,11 +203,24 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
                   channel_id: z.string(),
                   country_code: z.string(),
                   health: z.enum(["healthy", "degraded", "down"]),
-                  kind: z.enum(["mobile_money", "card", "sms", "bank"]),
+                  kind: z.enum(["mobile_money", "card", "sms", "bank", "airtime"]),
                   mode: modeSchema,
                   network: z.string().nullable(),
                   provider_code: z.string(),
                   status: z.enum(["active", "disabled", "maintenance"])
+                })
+              ),
+              airtime_volume_today_minor: z.number().int(),
+              low_float_channels: z.array(
+                z.object({
+                  balance_minor: z.number().int().nullable(),
+                  channel_id: z.string(),
+                  country_code: z.string(),
+                  currency: z.string().nullable(),
+                  network: z.string().nullable(),
+                  provider_code: z.string(),
+                  status: z.enum(["ok", "low", "empty", "unknown"]),
+                  threshold_minor: z.number().int().nullable()
                 })
               ),
               open_exceptions: z.number().int(),
@@ -137,7 +246,7 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
         app.db,
         "load admin overview",
         async (trx) => {
-          const [statsRows, activeMerchantsRow, openExceptionsRow, channels, collections, payouts, sms] =
+          const [statsRows, activeMerchantsRow, openExceptionsRow, channels, collections, payouts, sms, airtimeToday, lowFloats] =
             await Promise.all([
               trx
                 .selectFrom("merchant_daily_stats")
@@ -190,13 +299,37 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
                 .select(["channel_id", "status"])
                 .where("created_at", ">=", new Date(`${today}T00:00:00.000Z`))
                 .where("channel_id", "is not", null)
+                .execute(),
+              trx
+                .selectFrom("airtime_orders")
+                .select(["channel_id", "charge_amount", "status"])
+                .where("created_at", ">=", new Date(`${today}T00:00:00.000Z`))
+                .execute(),
+              trx
+                .selectFrom("channels as channel")
+                .innerJoin("airtime_channel_floats as float", "float.channel_id", "channel.id")
+                .select([
+                  "channel.country_code",
+                  "channel.id",
+                  "channel.network",
+                  "channel.provider_code",
+                  "float.balance_minor",
+                  "float.currency",
+                  "float.status",
+                  "float.threshold_minor"
+                ])
+                .where("channel.kind", "=", "airtime")
+                .where("float.status", "in", ["low", "empty"])
+                .orderBy("channel.country_code")
                 .execute()
             ]);
 
           return {
             activeMerchants: activeMerchantsRow.count,
+            airtimeToday,
             channels,
             collections,
+            lowFloats,
             openExceptions: openExceptionsRow.count,
             payouts,
             sms,
@@ -245,10 +378,18 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
       result.sms.forEach((row) => {
         record(row.channel_id, row.status === "delivered");
       });
+      result.airtimeToday.forEach((row) => {
+        record(row.channel_id, row.status === "successful");
+      });
+
+      const airtimeVolumeTodayMinor = result.airtimeToday
+        .filter((row) => row.status === "successful")
+        .reduce((sum, row) => sum + Number(row.charge_amount), 0);
 
       return {
         data: {
           active_merchants: result.activeMerchants,
+          airtime_volume_today_minor: airtimeVolumeTodayMinor,
           channel_health: result.channels.map((channel) => ({
             channel_id: channel.id,
             country_code: channel.country_code,
@@ -258,6 +399,16 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
             network: channel.network,
             provider_code: channel.provider_code,
             status: channel.status
+          })),
+          low_float_channels: result.lowFloats.map((row) => ({
+            balance_minor: row.balance_minor === null ? null : Number(row.balance_minor),
+            channel_id: row.id,
+            country_code: row.country_code,
+            currency: row.currency,
+            network: row.network,
+            provider_code: row.provider_code,
+            status: row.status,
+            threshold_minor: row.threshold_minor === null ? null : Number(row.threshold_minor)
           })),
           open_exceptions: result.openExceptions,
           platform_volume_today_minor: platformVolumeTodayMinor,
@@ -428,9 +579,16 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
               mode: modeSchema,
               payouts_frozen: z.boolean(),
               products: z.object({
+                airtime_enabled: z.boolean(),
+                airtime_requested: z.boolean(),
                 collections_enabled: z.boolean(),
+                collections_requested: z.boolean(),
                 payouts_enabled: z.boolean(),
-                sms_enabled: z.boolean()
+                payouts_requested: z.boolean(),
+                sms_api_enabled: z.boolean(),
+                sms_broadcast_enabled: z.boolean(),
+                sms_enabled: z.boolean(),
+                sms_requested: z.boolean()
               }),
               settlement_currency: z.string(),
               status: z.enum(["active", "closed", "pending_kyb", "suspended"]),
@@ -498,9 +656,16 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
           mode: result.merchant.mode,
           payouts_frozen: result.merchant.payouts_frozen,
           products: {
+            airtime_enabled: result.products?.airtime_enabled ?? false,
+            airtime_requested: result.products?.airtime_requested ?? false,
             collections_enabled: result.products?.collections_enabled ?? true,
+            collections_requested: result.products?.collections_requested ?? false,
             payouts_enabled: result.products?.payouts_enabled ?? true,
-            sms_enabled: result.products?.sms_enabled ?? true
+            payouts_requested: result.products?.payouts_requested ?? false,
+            sms_api_enabled: result.products?.sms_api_enabled ?? false,
+            sms_broadcast_enabled: result.products?.sms_broadcast_enabled ?? false,
+            sms_enabled: result.products?.sms_enabled ?? true,
+            sms_requested: result.products?.sms_requested ?? false
           },
           settlement_currency: result.merchant.settlement_currency,
           status: result.merchant.status,
@@ -1200,34 +1365,43 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
         app.db,
         "list kyb review queue",
         async (trx) => {
-          let profileQuery = trx
-            .selectFrom("kyb_profiles as profile")
-            .innerJoin("merchants as merchant", (join) =>
+          let merchantQuery = trx
+            .selectFrom("merchants as merchant")
+            .leftJoin("kyb_profiles as profile", (join) =>
               join
-                .onRef("merchant.id", "=", "profile.merchant_id")
-                .onRef("merchant.mode", "=", "profile.mode")
+                .onRef("profile.merchant_id", "=", "merchant.id")
+                .onRef("profile.mode", "=", "merchant.mode")
             )
             .select([
+              "merchant.created_at as merchant_created_at",
               "merchant.id as merchant_id",
               "merchant.legal_name",
+              "merchant.mode",
               "merchant.trading_name",
-              "profile.created_at",
-              "profile.mode",
+              "merchant.updated_at as merchant_updated_at",
+              "profile.created_at as profile_created_at",
               "profile.review_note",
-              "profile.status",
-              "profile.updated_at"
+              "profile.status as profile_status",
+              "profile.updated_at as profile_updated_at"
             ]);
 
           if (query.mode) {
-            profileQuery = profileQuery.where("profile.mode", "=", query.mode);
+            merchantQuery = merchantQuery.where("merchant.mode", "=", query.mode);
           }
 
-          if (query.status) {
-            profileQuery = profileQuery.where("profile.status", "=", query.status);
+          if (query.status === "approved" || query.status === "rejected") {
+            merchantQuery = merchantQuery.where("profile.status", "=", query.status);
+          } else {
+            merchantQuery = merchantQuery.where((expression) =>
+              expression.or([
+                expression("merchant.status", "=", "pending_kyb"),
+                expression("profile.status", "=", "pending")
+              ])
+            );
           }
 
-          const profiles = await profileQuery
-            .orderBy("profile.updated_at desc")
+          const profiles = await merchantQuery
+            .orderBy("merchant.updated_at", "desc")
             .limit(query.limit)
             .execute();
 
@@ -1259,17 +1433,22 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
       });
 
       return {
-        data: result.profiles.map((profile) => ({
-          created_at: profile.created_at.toISOString(),
-          merchant_id: profile.merchant_id,
-          merchant_name: profile.trading_name ?? profile.legal_name,
-          mode: profile.mode,
-          pending_document_count:
-            pendingDocs.get(`${profile.mode}:${profile.merchant_id}`) ?? 0,
-          review_note: profile.review_note,
-          status: serializeKybStatus(profile.status),
-          updated_at: profile.updated_at.toISOString()
-        }))
+        data: result.profiles.map((profile) => {
+          const createdAt = profile.profile_created_at ?? profile.merchant_created_at;
+          const updatedAt = profile.profile_updated_at ?? profile.merchant_updated_at;
+
+          return {
+            created_at: createdAt.toISOString(),
+            merchant_id: profile.merchant_id,
+            merchant_name: profile.trading_name ?? profile.legal_name,
+            mode: profile.mode,
+            pending_document_count:
+              pendingDocs.get(`${profile.mode}:${profile.merchant_id}`) ?? 0,
+            review_note: profile.review_note,
+            status: serializeKybStatus(profile.profile_status ?? "pending"),
+            updated_at: updatedAt.toISOString()
+          };
+        })
       };
     }
   );
@@ -1311,19 +1490,63 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
           targetId: params.merchantId,
           targetType: "kyb_profile"
         },
-        async (trx) =>
-          trx
-            .updateTable("kyb_profiles")
-            .set({
-              review_note: body.review_note,
-              reviewer_id: request.platformAdmin!.userId,
-              status: body.status,
-              updated_at: new Date()
-            })
+        async (trx) => {
+          const now = new Date();
+          const existing = await trx
+            .selectFrom("kyb_profiles")
+            .select("id")
             .where("merchant_id", "=", params.merchantId)
             .where("mode", "=", body.mode)
-            .returning(["review_note", "reviewer_id", "status", "updated_at"])
-            .executeTakeFirstOrThrow()
+            .executeTakeFirst();
+
+          const profile = existing
+            ? await trx
+                .updateTable("kyb_profiles")
+                .set({
+                  review_note: body.review_note,
+                  reviewer_id: request.platformAdmin!.userId,
+                  status: body.status,
+                  updated_at: now
+                })
+                .where("id", "=", existing.id)
+                .returning(["review_note", "reviewer_id", "status", "updated_at"])
+                .executeTakeFirstOrThrow()
+            : await trx
+                .insertInto("kyb_profiles")
+                .values({
+                  business_registration_number: null,
+                  created_at: now,
+                  id: newId("kyp_"),
+                  merchant_id: params.merchantId,
+                  mode: body.mode,
+                  registered_address: null,
+                  review_note: body.review_note,
+                  reviewer_id: request.platformAdmin!.userId,
+                  status: body.status,
+                  tax_id: null,
+                  updated_at: now
+                })
+                .returning(["review_note", "reviewer_id", "status", "updated_at"])
+                .executeTakeFirstOrThrow();
+
+          if (body.status === "approved") {
+            await trx
+              .updateTable("merchants")
+              .set({
+                status: "active",
+                updated_at: now
+              })
+              .where("id", "=", params.merchantId)
+              .where("mode", "=", body.mode)
+              .execute();
+
+            if (body.mode === "test") {
+              await provisionLiveMerchant(trx, params.merchantId);
+            }
+          }
+
+          return profile;
+        }
       );
 
       return {
@@ -1353,7 +1576,7 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
                 mode: modeSchema,
                 provider_ref: z.string().nullable(),
                 reference: z.string().nullable(),
-                resource_type: z.enum(["collection", "payout", "sms"]),
+                resource_type: z.enum(["collection", "payout", "sms", "airtime"]),
                 status: z.string()
               })
             )
@@ -1435,19 +1658,43 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
             )
             .limit(query.limit);
 
+          let airtimeQuery = trx
+            .selectFrom("airtime_orders")
+            .select([
+              "charge_amount",
+              "created_at",
+              "id",
+              "merchant_id",
+              "mode",
+              "provider_ref",
+              "reference",
+              "status"
+            ])
+            .where((eb) =>
+              eb.or([
+                eb("id", "like", likeValue),
+                eb("reference", "like", likeValue),
+                eb("phone", "like", likeValue),
+                eb("provider_ref", "like", likeValue)
+              ])
+            )
+            .limit(query.limit);
+
           if (query.mode) {
             collectionsQuery = collectionsQuery.where("mode", "=", query.mode);
             payoutsQuery = payoutsQuery.where("mode", "=", query.mode);
             smsQuery = smsQuery.where("mode", "=", query.mode);
+            airtimeQuery = airtimeQuery.where("mode", "=", query.mode);
           }
 
-          const [collections, payouts, sms] = await Promise.all([
+          const [collections, payouts, sms, airtime] = await Promise.all([
             collectionsQuery.execute(),
             payoutsQuery.execute(),
-            smsQuery.execute()
+            smsQuery.execute(),
+            airtimeQuery.execute()
           ]);
 
-          return { collections, payouts, sms };
+          return { airtime, collections, payouts, sms };
         },
         { audit: false }
       );
@@ -1485,12 +1732,185 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
           reference: row.reference,
           resource_type: "sms" as const,
           status: row.status
+        })),
+        ...result.airtime.map((row) => ({
+          amount_minor: Number(row.charge_amount),
+          created_at: row.created_at.toISOString(),
+          id: row.id,
+          merchant_id: row.merchant_id,
+          mode: row.mode,
+          provider_ref: row.provider_ref,
+          reference: row.reference,
+          resource_type: "airtime" as const,
+          status: row.status
         }))
       ]
         .sort((left, right) => right.created_at.localeCompare(left.created_at))
         .slice(0, query.limit);
 
       return { data: rows };
+    }
+  );
+
+  app.put(
+    "/merchants/:merchantId/products",
+    {
+      schema: {
+        body: z.object({
+          airtime_enabled: z.boolean(),
+          collections_enabled: z.boolean(),
+          mode: modeSchema,
+          payouts_enabled: z.boolean(),
+          reason: z.string().min(1),
+          sms_api_enabled: z.boolean(),
+          sms_broadcast_enabled: z.boolean()
+        }),
+        params: merchantParamsSchema,
+        response: {
+          200: z.object({
+            data: z.object({
+              updated: z.literal(true)
+            })
+          })
+        }
+      }
+    },
+    async (request) => {
+      const params = merchantParamsSchema.parse(request.params);
+      const body = z.object({
+        airtime_enabled: z.boolean(),
+        collections_enabled: z.boolean(),
+        mode: modeSchema,
+        payouts_enabled: z.boolean(),
+        reason: z.string().min(1),
+        sms_api_enabled: z.boolean(),
+        sms_broadcast_enabled: z.boolean()
+      }).parse(request.body);
+
+      await runAdminSystemWrite(
+        app.db,
+        {
+          action: "merchant.products.update",
+          actorId: request.platformAdmin!.userId,
+          merchantId: params.merchantId,
+          mode: body.mode,
+          reason: body.reason,
+          targetId: params.merchantId,
+          targetType: "merchant_products"
+        },
+        async (trx) => {
+          const wantsSms = body.sms_api_enabled || body.sms_broadcast_enabled;
+          await trx
+            .insertInto("merchant_products")
+            .values({
+              airtime_enabled: body.airtime_enabled,
+              collections_enabled: body.collections_enabled,
+              merchant_id: params.merchantId,
+              mode: body.mode,
+              payouts_enabled: body.payouts_enabled,
+              sms_api_enabled: body.sms_api_enabled,
+              sms_broadcast_enabled: body.sms_broadcast_enabled,
+              sms_enabled: wantsSms
+            })
+            .onConflict((conflict) =>
+              conflict.columns(["merchant_id", "mode"]).doUpdateSet({
+                airtime_enabled: body.airtime_enabled,
+                airtime_requested: false,
+                collections_enabled: body.collections_enabled,
+                collections_requested: false,
+                payouts_enabled: body.payouts_enabled,
+                payouts_requested: false,
+                sms_api_enabled: body.sms_api_enabled,
+                sms_broadcast_enabled: body.sms_broadcast_enabled,
+                sms_enabled: wantsSms,
+                sms_requested: false,
+                updated_at: new Date()
+              })
+            )
+            .execute();
+
+          return { updated: true as const };
+        }
+      );
+
+      return { data: { updated: true as const } };
+    }
+  );
+
+  app.put(
+    "/merchants/:merchantId/limits",
+    {
+      schema: {
+        body: z.object({
+          collections_max_minor: z.number().int().positive(),
+          mode: modeSchema,
+          payouts_max_minor: z.number().int().positive(),
+          reason: z.string().min(1)
+        }),
+        params: merchantParamsSchema,
+        response: {
+          200: z.object({
+            data: z.object({ updated: z.literal(true) })
+          })
+        }
+      }
+    },
+    async (request) => {
+      const params = merchantParamsSchema.parse(request.params);
+      const body = z.object({
+        collections_max_minor: z.number().int().positive(),
+        mode: modeSchema,
+        payouts_max_minor: z.number().int().positive(),
+        reason: z.string().min(1)
+      }).parse(request.body);
+
+      await runAdminSystemWrite(
+        app.db,
+        {
+          action: "merchant.limits.update",
+          actorId: request.platformAdmin!.userId,
+          merchantId: params.merchantId,
+          mode: body.mode,
+          reason: body.reason,
+          targetId: params.merchantId,
+          targetType: "merchant_compliance_profile"
+        },
+        async (trx) => {
+          const existing = await trx
+            .selectFrom("merchant_compliance_profiles")
+            .select("merchant_id")
+            .where("merchant_id", "=", params.merchantId)
+            .where("mode", "=", body.mode)
+            .executeTakeFirst();
+
+          if (existing) {
+            await trx
+              .updateTable("merchant_compliance_profiles")
+              .set({
+                collections_max_minor: BigInt(body.collections_max_minor),
+                payouts_max_minor: BigInt(body.payouts_max_minor),
+                updated_at: new Date()
+              })
+              .where("merchant_id", "=", params.merchantId)
+              .where("mode", "=", body.mode)
+              .execute();
+          } else {
+            await trx
+              .insertInto("merchant_compliance_profiles")
+              .values({
+                collections_max_minor: BigInt(body.collections_max_minor),
+                merchant_id: params.merchantId,
+                mode: body.mode,
+                payouts_max_minor: BigInt(body.payouts_max_minor)
+              })
+              .execute();
+          }
+
+          return { updated: true as const };
+        }
+      );
+
+      return { data: { updated: true as const } };
     }
   );
 
@@ -1533,7 +1953,7 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
               "profile.full_name",
               "user.email"
             ])
-            .orderBy("admin.created_at desc")
+            .orderBy("admin.created_at", "desc")
             .execute(),
         { audit: false }
       );
@@ -1549,6 +1969,92 @@ export async function registerAdminPortalRoutes(app: FastifyTypedInstance) {
           user_id: row.user_id
         }))
       };
+    }
+  );
+
+  app.post(
+    "/admin-users",
+    {
+      schema: {
+        body: z.object({
+          email: z.string().email(),
+          full_name: z.string().min(1),
+          password: z.string().min(8),
+          role: z.enum(["super_admin", "compliance", "operations", "finance", "support"])
+        }),
+        response: {
+          201: z.object({
+            data: z.object({
+              user_id: z.string()
+            })
+          })
+        }
+      }
+    },
+    async (request, reply) => {
+      const body = z.object({
+        email: z.string().email(),
+        full_name: z.string().min(1),
+        password: z.string().min(8),
+        role: z.enum(["super_admin", "compliance", "operations", "finance", "support"])
+      }).parse(request.body);
+      const supabase = createSupabaseServiceClient(app.appEnv);
+      const created = await supabase.auth.admin.createUser({
+        email: body.email,
+        email_confirm: true,
+        password: body.password,
+        user_metadata: { full_name: body.full_name }
+      });
+
+      if (created.error || !created.data.user?.id) {
+        throw new ApiRouteError({
+          code: "validation_error",
+          field: "email",
+          message: created.error?.message ?? "Unable to create the admin user",
+          statusCode: 400
+        });
+      }
+
+      const userId = created.data.user.id;
+
+      await runWithSystemScope(
+        app.db,
+        "create platform admin",
+        async (trx) => {
+          await trx
+            .insertInto("profiles")
+            .values({
+              full_name: body.full_name,
+              phone: null,
+              user_id: userId
+            })
+            .onConflict((conflict) =>
+              conflict.column("user_id").doUpdateSet({
+                full_name: body.full_name
+              })
+            )
+            .execute();
+
+          await trx
+            .insertInto("platform_admins")
+            .values({
+              active: true,
+              role: body.role,
+              user_id: userId
+            })
+            .onConflict((conflict) =>
+              conflict.column("user_id").doUpdateSet({
+                active: true,
+                role: body.role,
+                updated_at: new Date()
+              })
+            )
+            .execute();
+        },
+        { audit: false }
+      );
+
+      return reply.status(201).send({ data: { user_id: userId } });
     }
   );
 

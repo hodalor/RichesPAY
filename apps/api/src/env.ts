@@ -29,6 +29,21 @@ const ENV_SCHEMA = z.object({
   DASHBOARD_ORIGIN: z.string().url("DASHBOARD_ORIGIN must be a valid URL"),
   ADMIN_ORIGIN: z.string().url("ADMIN_ORIGIN must be a valid URL"),
   CHECKOUT_ORIGIN: z.string().url("CHECKOUT_ORIGIN must be a valid URL"),
+  SENTRY_DSN: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().url().optional()
+  ),
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().url().optional()
+  ),
+  OTEL_SERVICE_NAME: z.string().min(1).optional(),
+  DEPLOY_ENV: z.enum(["development", "staging", "production"]).optional(),
+  METRICS_TOKEN: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).optional()
+  ),
+  PROVIDER_FLOAT_LOW_MINOR: z.coerce.number().int().positive().optional(),
   ADMIN_IP_ALLOWLIST: z
     .string()
     .min(1, "ADMIN_IP_ALLOWLIST is required")

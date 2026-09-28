@@ -5,6 +5,7 @@ import type {
 } from "@richespay/shared";
 
 import { env } from "./env";
+import { supabase } from "./supabase";
 
 export class ApiError extends Error {
   constructor(
@@ -22,6 +23,7 @@ export class ApiError extends Error {
 export interface ApiRequestOptions extends RequestInit {
   accessToken?: string | null;
   merchantId?: string | null;
+  retriedAfterRefresh?: boolean;
 }
 
 function isApiErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
@@ -34,29 +36,68 @@ function isApiErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
   );
 }
 
+const requestTimeoutMs = 8_000;
+
 export async function apiRequest<T>(
   path: string,
   init: ApiRequestOptions = {}
 ): Promise<T> {
-  const headers = new Headers(init.headers);
+  const { accessToken, merchantId, retriedAfterRefresh, ...requestInit } = init;
+  const headers = new Headers(requestInit.headers);
   headers.set("Accept", "application/json");
 
-  if (!headers.has("Content-Type") && init.body) {
+  if (!headers.has("Content-Type") && requestInit.body) {
     headers.set("Content-Type", "application/json");
   }
 
-  if (init.accessToken) {
-    headers.set("Authorization", `Bearer ${init.accessToken}`);
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
-  if (init.merchantId) {
-    headers.set("X-Merchant-Id", init.merchantId);
+  if (merchantId) {
+    headers.set("X-Merchant-Id", merchantId);
   }
 
-  const response = await fetch(new URL(path, env.apiBaseUrl), {
-    ...init,
-    headers
-  });
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), requestTimeoutMs);
+  let response: Response;
+
+  try {
+    response = await fetch(new URL(path, env.apiBaseUrl), {
+      ...requestInit,
+      headers,
+      signal: requestInit.signal ?? controller.signal
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(
+        "The API did not respond in time. Check that it is running, then try again.",
+        "internal_error",
+        0
+      );
+    }
+
+    throw new ApiError(
+      "Cannot reach the API. Start it, then try again.",
+      "internal_error",
+      0
+    );
+  } finally {
+    window.clearTimeout(timeout);
+  }
+
+  if (response.status === 401 && accessToken && !retriedAfterRefresh) {
+    const refreshed = await supabase.auth.refreshSession();
+    const nextToken = refreshed.data.session?.access_token;
+
+    if (nextToken) {
+      return apiRequest(path, {
+        ...init,
+        accessToken: nextToken,
+        retriedAfterRefresh: true
+      });
+    }
+  }
 
   const bodyText = await response.text();
   const body = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;

@@ -12,14 +12,20 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type Session } from "@supabase/supabase-js";
 import { Building2 } from "lucide-react";
-import { Button, Input, ToastProvider, useToast } from "@richespay/ui";
+import { Button, Checkbox, Input, ToastProvider, useToast } from "@richespay/ui";
 
 import { ApiError, apiRequest } from "./api-client";
 import { MerchantWorkspace } from "./routes/merchant-workspace";
 import { UIKitPage } from "./routes/ui-kit-page";
 import { supabase } from "./supabase";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 0
+    }
+  }
+});
 const signUpEmailStorageKey = "richespay_dashboard_signup_email";
 
 interface AuthContextValue {
@@ -237,6 +243,11 @@ function SignUpPage() {
   const [email, setEmail] = React.useState("");
   const [fullName, setFullName] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [collections, setCollections] = React.useState(true);
+  const [payouts, setPayouts] = React.useState(false);
+  const [smsBroadcast, setSmsBroadcast] = React.useState(false);
+  const [smsApi, setSmsApi] = React.useState(false);
+  const [airtime, setAirtime] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
 
   return (
@@ -249,6 +260,22 @@ function SignUpPage() {
         className="space-y-4"
         onSubmit={async (event) => {
           event.preventDefault();
+          const missing = [
+            businessName.trim() ? null : "business name",
+            fullName.trim() ? null : "full name",
+            email.trim() ? null : "email",
+            password.trim() ? null : "password"
+          ].filter((field): field is string => field !== null);
+
+          if (missing.length > 0) {
+            pushToast({
+              title: "Sign-up failed",
+              description: `Enter your ${missing.join(", ")} before creating the account.`,
+              variant: "danger"
+            });
+            return;
+          }
+
           setSubmitting(true);
 
           try {
@@ -259,11 +286,16 @@ function SignUpPage() {
               verification_required: boolean;
             }>("/dashboard/v1/auth/sign-up", {
               body: JSON.stringify({
-                business_name: businessName,
+                business_name: businessName.trim(),
                 country_code: countryCode,
-                email,
-                full_name: fullName,
-                password
+                email: email.trim(),
+                full_name: fullName.trim(),
+                password,
+                payouts,
+                airtime,
+                sms_api: smsApi,
+                sms_broadcast: smsBroadcast,
+                collections
               }),
               method: "POST"
             });
@@ -292,11 +324,34 @@ function SignUpPage() {
           }
         }}
       >
-        <Input label="Business name" onChange={(event) => setBusinessName(event.target.value)} value={businessName} />
+        <Input label="Business name" required onChange={(event) => setBusinessName(event.target.value)} value={businessName} />
         <Input label="Country code" onChange={(event) => setCountryCode(event.target.value.toUpperCase())} value={countryCode} />
-        <Input label="Full name" onChange={(event) => setFullName(event.target.value)} value={fullName} />
+        <Input label="Full name" required onChange={(event) => setFullName(event.target.value)} value={fullName} />
         <Input label="Email" onChange={(event) => setEmail(event.target.value)} type="email" value={email} />
         <Input label="Password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-text">Choose products</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className={`rounded-card border p-4 ${collections ? "border-brand bg-brand-50" : "border-border bg-surface"}`}>
+              <Checkbox checked={collections} label="Collections" description="Accept mobile money and card payments." onChange={() => setCollections((current) => !current)} />
+            </label>
+            <label className={`rounded-card border p-4 ${payouts ? "border-brand bg-brand-50" : "border-border bg-surface"}`}>
+              <Checkbox checked={payouts} label="Payouts" description="Send money to customers." onChange={() => setPayouts((current) => !current)} />
+            </label>
+            <label className={`rounded-card border p-4 ${smsBroadcast || smsApi ? "border-brand bg-brand-50" : "border-border bg-surface"}`}>
+              <p className="text-sm font-medium text-text">SMS</p>
+              <p className="mt-1 text-xs text-text-secondary">Broadcast from the dashboard, trigger from your app, or both.</p>
+              <div className="mt-3 space-y-2">
+                <Checkbox checked={smsBroadcast} label="SMS broadcast" description="Paste numbers and send from the dashboard." onChange={() => setSmsBroadcast((current) => !current)} />
+                <Checkbox checked={smsApi} label="SMS API" description="Send messages from your own system." onChange={() => setSmsApi((current) => !current)} />
+              </div>
+            </label>
+            <label className={`rounded-card border p-4 ${airtime ? "border-brand bg-brand-50" : "border-border bg-surface"}`}>
+              <Checkbox checked={airtime} label="Send airtime" description="Top up mobile numbers from your available balance." onChange={() => setAirtime((current) => !current)} />
+            </label>
+          </div>
+        </div>
+        <p className="text-sm text-text-secondary">New accounts start in test mode. Live access opens after KYB approval.</p>
         <Button className="w-full" loading={submitting} type="submit" variant="primary">
           Create account
         </Button>
@@ -711,6 +766,10 @@ const router = createBrowserRouter([
       },
       {
         path: "/app/messages",
+        element: <DashboardWorkspacePage />
+      },
+      {
+        path: "/app/airtime",
         element: <DashboardWorkspacePage />
       },
       {

@@ -81,6 +81,8 @@ async function resolveHealthCheck(catalog: ProviderCatalog, channel: ChannelReco
       return catalog.resolveMobileMoneyProvider(channel).healthCheck();
     case "sms":
       return catalog.resolveSmsProvider(channel).healthCheck();
+    case "airtime":
+      return catalog.resolveAirtimeProvider(channel).healthCheck();
   }
 }
 

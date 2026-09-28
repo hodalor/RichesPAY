@@ -13,6 +13,7 @@ import {
 } from "@richespay/shared";
 
 import { authenticateSupabaseSession } from "../auth/session";
+import { registerAirtimeDashboardRoutes } from "../airtime";
 import { registerCheckoutDashboardRoutes } from "../checkout";
 import { ComplianceService } from "../compliance";
 import { registerMerchantDashboardRoutes } from "../dashboard/merchant-routes";
@@ -36,10 +37,15 @@ import type { FastifyTypedInstance } from "../types";
 
 const signUpBodySchema = z.object({
   business_name: z.string().min(1),
+  collections: z.boolean().default(true),
   country_code: z.string().length(2),
   email: z.string().email(),
   full_name: z.string().min(1),
-  password: z.string().min(8)
+  password: z.string().min(8),
+  payouts: z.boolean().default(false),
+  airtime: z.boolean().default(false),
+  sms_api: z.boolean().default(false),
+  sms_broadcast: z.boolean().default(false)
 });
 
 const switchMerchantBodySchema = z.object({
@@ -144,6 +150,14 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
     },
     async (request, reply) => {
       const body = signUpBodySchema.parse(request.body);
+
+      if (!body.collections && !body.payouts && !body.sms_api && !body.sms_broadcast && !body.airtime) {
+        throw new ApiRouteError({
+          code: "validation_error",
+          message: "Choose at least one product: collections, payouts, SMS API, SMS broadcast, or airtime.",
+          statusCode: 400
+        });
+      }
       // Server-side Admin API avoids anon signup email rate limits and keeps
       // merchant provisioning tied to Auth user creation.
       const supabase = createSupabaseServiceClient(app.appEnv);
@@ -211,7 +225,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               country_code: country.code,
               id: newId("mer_"),
               legal_name: body.business_name,
-              mode: "live",
+              mode: "test",
               payouts_frozen: false,
               settlement_currency: settlementCurrencyForCountry(country.code),
               status: "pending_kyb",
@@ -221,11 +235,27 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
             .returning(["id", "settlement_currency"])
             .executeTakeFirstOrThrow();
 
+          const wantsSms = body.sms_api || body.sms_broadcast;
+
+          await trx
+            .insertInto("merchant_products")
+            .values({
+              airtime_enabled: body.airtime,
+              collections_enabled: body.collections,
+              merchant_id: insertedMerchant.id,
+              mode: "test",
+              payouts_enabled: body.payouts,
+              sms_api_enabled: body.sms_api,
+              sms_broadcast_enabled: body.sms_broadcast,
+              sms_enabled: wantsSms
+            })
+            .execute();
+
           await trx
             .insertInto("memberships")
             .values({
               merchant_id: insertedMerchant.id,
-              mode: "live",
+              mode: "test",
               role: "owner",
               user_id: userId
             })
@@ -494,6 +524,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
     await registerMerchantDashboardRoutes(protectedApp);
     await registerPayoutDashboardRoutes(protectedApp);
     await registerSmsDashboardRoutes(protectedApp);
+    await registerAirtimeDashboardRoutes(protectedApp);
     await registerSettlementDashboardRoutes(protectedApp);
     await registerTopupDashboardRoutes(protectedApp);
     await registerWebhookDashboardRoutes(protectedApp);
@@ -543,9 +574,12 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
                 }),
                 email: z.string().nullable(),
                 active_products: z.object({
+                  airtime: z.boolean(),
                   collections: z.boolean(),
                   payouts: z.boolean(),
-                  sms: z.boolean()
+                  sms: z.boolean(),
+                  sms_api: z.boolean(),
+                  sms_broadcast: z.boolean()
                 }),
                 merchant_id: z.string(),
                 merchant_name: z.string(),
@@ -568,7 +602,14 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
 
         return {
           data: {
-            active_products: request.dashboardMembership!.activeProducts,
+            active_products: {
+              airtime: request.dashboardMembership!.activeProducts.airtime,
+              collections: request.dashboardMembership!.activeProducts.collections,
+              payouts: request.dashboardMembership!.activeProducts.payouts,
+              sms: request.dashboardMembership!.activeProducts.sms,
+              sms_api: request.dashboardMembership!.activeProducts.smsApi,
+              sms_broadcast: request.dashboardMembership!.activeProducts.smsBroadcast
+            },
             compliance: {
               collections_freeze_category: summary.collectionsFreezeCategory,
               collections_freeze_reason: summary.collectionsFreezeReason,
@@ -592,6 +633,115 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
           user_id: request.dashboardMembership!.userId
         }
         };
+      }
+    );
+
+    const catalogProductSchema = z.enum(["airtime", "collections", "payouts", "sms"]);
+    const productRequestColumns = {
+      airtime: { enabled: "airtime_enabled", requested: "airtime_requested" },
+      collections: { enabled: "collections_enabled", requested: "collections_requested" },
+      payouts: { enabled: "payouts_enabled", requested: "payouts_requested" },
+      sms: { enabled: "sms_enabled", requested: "sms_requested" }
+    } as const;
+
+    protectedApp.get(
+      "/products",
+      {
+        schema: {
+          response: {
+            200: z.object({
+              data: z.array(
+                z.object({
+                  active: z.boolean(),
+                  key: catalogProductSchema,
+                  requested: z.boolean()
+                })
+              )
+            })
+          }
+        }
+      },
+      async (request) => {
+        const membership = request.dashboardMembership!;
+        const row = await runWithSystemScope(
+          app.db,
+          "load merchant product requests",
+          async (trx) =>
+            trx
+              .selectFrom("merchant_products")
+              .selectAll()
+              .where("merchant_id", "=", membership.merchantId)
+              .where("mode", "=", membership.mode)
+              .executeTakeFirst(),
+          { audit: false }
+        );
+
+        return {
+          data: [
+            {
+              active: membership.activeProducts.collections,
+              key: "collections" as const,
+              requested: row?.collections_requested ?? false
+            },
+            {
+              active: membership.activeProducts.payouts,
+              key: "payouts" as const,
+              requested: row?.payouts_requested ?? false
+            },
+            {
+              active: membership.activeProducts.sms,
+              key: "sms" as const,
+              requested: row?.sms_requested ?? false
+            },
+            {
+              active: membership.activeProducts.airtime,
+              key: "airtime" as const,
+              requested: row?.airtime_requested ?? false
+            }
+          ]
+        };
+      }
+    );
+
+    protectedApp.post(
+      "/products/request",
+      {
+        schema: {
+          body: z.object({ product: catalogProductSchema }),
+          response: {
+            200: z.object({
+              data: z.object({
+                product: catalogProductSchema,
+                requested: z.literal(true)
+              })
+            })
+          }
+        }
+      },
+      async (request) => {
+        request.assertDashboardPermission("team.manage");
+        const membership = request.dashboardMembership!;
+        const { product } = z.object({ product: catalogProductSchema }).parse(request.body);
+        const columns = productRequestColumns[product];
+
+        await runWithSystemScope(
+          app.db,
+          "merchant requested a product",
+          async (trx) => {
+            await trx
+              .updateTable("merchant_products")
+              .set({
+                [columns.requested]: true,
+                updated_at: new Date()
+              })
+              .where("merchant_id", "=", membership.merchantId)
+              .where("mode", "=", membership.mode)
+              .where(columns.enabled, "=", false)
+              .execute();
+          }
+        );
+
+        return { data: { product, requested: true as const } };
       }
     );
 
@@ -824,7 +974,7 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
               "scopes"
             ])
             .where("merchant_id", "=", request.dashboardMembership!.merchantId)
-            .orderBy("created_at desc")
+            .orderBy("created_at", "desc")
             .execute()
         );
 
@@ -876,6 +1026,23 @@ export async function registerDashboardRoutes(app: FastifyTypedInstance) {
         request.assertDashboardPermission("api_keys.manage");
         const body = createApiKeyBodySchema.parse(request.body);
         const keyMode = body.mode ?? request.dashboardMembership!.mode;
+
+        if (keyMode === "live" && request.dashboardMembership!.merchantStatus !== "active") {
+          throw new ApiRouteError({
+            code: "forbidden",
+            message: "Live API keys stay locked until KYB approval activates this merchant.",
+            statusCode: 403
+          });
+        }
+
+        if (keyMode === "live" && request.dashboardMembership!.mode !== "live") {
+          throw new ApiRouteError({
+            code: "forbidden",
+            message: "Switch to an approved live merchant before creating a live key.",
+            statusCode: 403
+          });
+        }
+
         const plainKey = createPlainApiKey(keyMode, body.kind);
 
         const createdKey = await request.withDashboardScope(async (trx) => {

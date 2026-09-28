@@ -21,9 +21,13 @@ import {
   registerDatabase
 } from "./db";
 import type { AppEnv } from "./env";
-import { extractErrorCode, isApiRouteError } from "./lib/api-error";
+import { ApiRouteError, extractErrorCode, isApiRouteError } from "./lib/api-error";
 import { requestIdPlugin } from "./plugins/request-id";
 import { registerHealthRoutes } from "./routes/health";
+import { registerObservabilityRoutes } from "./routes/status";
+import { captureSentryError } from "./observability/sentry";
+import { recordHttpRequest } from "./observability/metrics";
+import { recordCompletedSpan } from "./observability/tracing";
 import { registerAdminRoutes } from "./routes/admin";
 import { registerCallbackRoutes } from "./routes/callbacks";
 import { registerDashboardRoutes } from "./routes/dashboard";
@@ -132,10 +136,26 @@ function isAllowedCorsOrigin(
 
 export async function buildApp(env: AppEnv) {
   const redis = new IORedis(env.REDIS_URL, {
+    connectTimeout: 400,
+    enableOfflineQueue: false,
     enableReadyCheck: false,
     lazyConnect: true,
-    maxRetriesPerRequest: 1
+    maxRetriesPerRequest: 1,
+    retryStrategy: () => null
   });
+  redis.on("error", () => {
+    // Startup probe and skipOnError handle a missing local Redis.
+  });
+  let redisReady = false;
+
+  try {
+    await redis.connect();
+    await redis.ping();
+    redisReady = redis.status === "ready";
+  } catch {
+    redisReady = false;
+    redis.disconnect();
+  }
 
   const dbPool = createDatabasePool(env.DATABASE_URL);
   const db = createDatabase(dbPool);
@@ -296,6 +316,7 @@ export async function buildApp(env: AppEnv) {
 
     if (resolvedStatusCode >= 500) {
       request.log.error({ err: error }, "Unhandled request error");
+      void captureSentryError(env, error);
     }
 
     const code = explicitCode
@@ -324,7 +345,14 @@ export async function buildApp(env: AppEnv) {
       info: {
         title: "RichesPay API",
         version: "0.0.0"
-      }
+      },
+      tags: [
+        {
+          description:
+            "Send mobile airtime top-ups. Face value is always in the recipient currency. The merchant is charged face value minus the network discount, converted into settlement currency when needed.",
+          name: "Airtime"
+        }
+      ]
     },
     transform: jsonSchemaTransform
   });
@@ -354,13 +382,14 @@ export async function buildApp(env: AppEnv) {
     env.CHECKOUT_ORIGIN
   ];
   await app.register(cors, {
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"],
     origin: (origin, callback) => {
       callback(null, isAllowedCorsOrigin(origin, allowedAppOrigins, env.APP_ENV));
     }
   });
   await app.register(rateLimit, {
     max: 100,
-    redis,
+    ...(redisReady ? { redis } : {}),
     skipOnError: true,
     timeWindow: "1 minute",
     errorResponseBuilder: (request) =>
@@ -372,6 +401,21 @@ export async function buildApp(env: AppEnv) {
   });
 
   await registerHealthRoutes(app);
+  await registerObservabilityRoutes(app);
+  app.addHook("onResponse", async (request, reply) => {
+    const route = request.routeOptions.url ?? "unmatched";
+    recordHttpRequest({
+      durationSeconds: reply.elapsedTime / 1000,
+      method: request.method,
+      route,
+      status: reply.statusCode
+    });
+    recordCompletedSpan(env, `${request.method} ${route}`, reply.elapsedTime, {
+      method: request.method,
+      route,
+      status: String(reply.statusCode)
+    });
+  });
   await app.register(registerCallbackRoutes, { prefix: "/callbacks" });
   await app.register(registerV1Routes, { prefix: "/v1" });
   await app.register(registerDashboardRoutes, { prefix: "/dashboard/v1" });

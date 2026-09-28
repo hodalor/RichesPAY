@@ -18,7 +18,7 @@ export const platformAdminRoles = [
 ] as const;
 
 export const apiKeyKinds = ["secret", "public"] as const;
-export const apiKeyScopes = ["collections", "payouts", "sms", "read"] as const;
+export const apiKeyScopes = ["collections", "payouts", "sms", "airtime", "read"] as const;
 
 export type MerchantRole = (typeof merchantRoles)[number];
 export type PlatformAdminRole = (typeof platformAdminRoles)[number];
@@ -29,6 +29,7 @@ export const merchantPermissions = [
   "members.read",
   "merchant.switch",
   "payouts.create",
+  "airtime.send",
   "sms.manage",
   "settlements.manage",
   "topups.manage",
@@ -44,6 +45,7 @@ export const merchantPermissionMatrix: Record<
   MerchantPermission,
   readonly MerchantRole[]
 > = {
+  "airtime.send": ["owner", "admin", "finance"],
   "api_keys.manage": ["owner", "admin", "developer"],
   "members.read": merchantRoles,
   "merchant.switch": merchantRoles,

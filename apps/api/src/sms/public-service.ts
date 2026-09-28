@@ -5,6 +5,7 @@ import { runWithMerchantScope, runWithSystemScope, type AppDatabase, type Scoped
 import type { Json, RpMode } from "../db/types";
 import { LedgerService } from "../ledger";
 import { ApiRouteError } from "../lib/api-error";
+import { requireProduct } from "../products/require-product";
 import { detectNetworkFromMsisdn } from "../providers/msisdn";
 import { ProviderCatalog } from "../providers/catalog";
 import { DatabaseChannelRegistry } from "../providers/router";
@@ -116,7 +117,7 @@ export class SmsMessagingService {
       const optedOut = await this.#isOptedOut(input.merchantId, input.mode, prepared.normalizedPhone);
       if (optedOut) {
         return runWithMerchantScope(this.#database, input.merchantId, input.mode, async (trx) => {
-          await this.#assertSmsProductEnabled(trx);
+          await this.#assertSmsProductEnabled(trx, input.merchantId, input.mode);
           const rejected = await trx
             .insertInto("sms_messages")
             .values({
@@ -161,7 +162,7 @@ export class SmsMessagingService {
 
     let messageId = "";
     const created = await runWithMerchantScope(this.#database, input.merchantId, input.mode, async (trx) => {
-      await this.#assertSmsProductEnabled(trx);
+      await this.#assertSmsProductEnabled(trx, input.merchantId, input.mode);
 
       const inserted = await trx
         .insertInto("sms_messages")
@@ -303,7 +304,7 @@ export class SmsMessagingService {
     }
 
     const batch = await runWithMerchantScope(this.#database, input.merchantId, input.mode, async (trx) => {
-      await this.#assertSmsProductEnabled(trx);
+      await this.#assertSmsProductEnabled(trx, input.merchantId, input.mode);
 
       const insertedBatch = await trx
         .insertInto("sms_batches")
@@ -443,7 +444,7 @@ export class SmsMessagingService {
     const expiresAt = new Date(Date.now() + input.expiresInSeconds * 1000);
 
     await runWithMerchantScope(this.#database, input.merchantId, input.mode, async (trx) => {
-      await this.#assertSmsProductEnabled(trx);
+      await this.#assertSmsProductEnabled(trx, input.merchantId, input.mode);
       await trx
         .insertInto("sms_otps")
         .values({
@@ -481,7 +482,7 @@ export class SmsMessagingService {
     verified: boolean;
   }> {
     return runWithMerchantScope(this.#database, input.merchantId, input.mode, async (trx) => {
-      await this.#assertSmsProductEnabled(trx);
+      await this.#assertSmsProductEnabled(trx, input.merchantId, input.mode);
       const otp = await trx
         .selectFrom("sms_otps")
         .selectAll()
@@ -574,7 +575,7 @@ export class SmsMessagingService {
 
   async getById(merchantId: string, mode: RpMode, id: string): Promise<SmsMessageRecord> {
     return runWithMerchantScope(this.#database, merchantId, mode, async (trx) => {
-      await this.#assertSmsProductEnabled(trx);
+      await this.#assertSmsProductEnabled(trx, merchantId, mode);
       const row = await trx
         .selectFrom("sms_messages")
         .selectAll()
@@ -612,7 +613,7 @@ export class SmsMessagingService {
     nextStartingAfter: string | null;
   }> {
     return runWithMerchantScope(this.#database, merchantId, mode, async (trx) => {
-      await this.#assertSmsProductEnabled(trx);
+      await this.#assertSmsProductEnabled(trx, merchantId, mode);
 
       let query = trx
         .selectFrom("sms_messages")
@@ -686,7 +687,7 @@ export class SmsMessagingService {
     id: string
   ): Promise<SmsBatchView> {
     return runWithMerchantScope(this.#database, merchantId, mode, async (trx) => {
-      await this.#assertSmsProductEnabled(trx);
+      await this.#assertSmsProductEnabled(trx, merchantId, mode);
       const batch = await trx
         .selectFrom("sms_batches")
         .selectAll()
@@ -1168,19 +1169,8 @@ export class SmsMessagingService {
     });
   }
 
-  async #assertSmsProductEnabled(trx: ScopedTransaction) {
-    const row = await trx
-      .selectFrom("merchant_products")
-      .select(["sms_enabled"])
-      .executeTakeFirst();
-
-    if (row && row.sms_enabled === false) {
-      throw new ApiRouteError({
-        code: "product_not_enabled",
-        message: "The SMS product is not enabled for this merchant.",
-        statusCode: 403
-      });
-    }
+  async #assertSmsProductEnabled(trx: ScopedTransaction, merchantId: string, mode: RpMode) {
+    await requireProduct(trx, { merchantId, mode }, "sms");
   }
 
   async #isOptedOut(merchantId: string, mode: RpMode, phone: string) {

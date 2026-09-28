@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsup src/server.ts --format esm --out-dir dist",
+    "build": "tsup src/server.ts src/worker.ts --format esm --out-dir dist",
     "db:typegen": "tsx src/db/scripts/generate-types.ts",
     "seed:reference": "node scripts/seed-reference-data.mjs",
     "seed:super-admin": "node scripts/seed-super-admin.mjs",

@@ -310,6 +310,8 @@ export class ProviderCallbackService {
         return this.#catalog.resolveMobileMoneyProvider(channel).parseCallback(rawBody);
       case "sms":
         return this.#catalog.resolveSmsProvider(channel).parseDeliveryReport(rawBody);
+      case "airtime":
+        return this.#catalog.resolveAirtimeProvider(channel).parseCallback(rawBody);
       default:
         throw new Error(`Unsupported callback channel kind: ${channel.kind satisfies never}`);
     }
@@ -332,6 +334,8 @@ export class ProviderCallbackService {
         return this.#catalog.resolveMobileMoneyProvider(channel).verifyCallback(input);
       case "sms":
         return verifyGenericCallback(channel.config, input);
+      case "airtime":
+        return this.#catalog.resolveAirtimeProvider(channel).verifyCallback(input);
       default:
         throw new Error(`Unsupported callback channel kind: ${channel.kind satisfies never}`);
     }

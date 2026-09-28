@@ -1062,6 +1062,7 @@ export interface AppShellProps {
   navItems?: readonly SidebarItem[];
   navSections?: readonly SidebarSection[];
   onModeChange: (mode: PageMode) => void;
+  liveAccessEnabled?: boolean;
   shellVariant?: "admin" | "merchant";
   subtitle?: string;
   title: string;
@@ -1074,6 +1075,7 @@ export function AppShell({
   mode,
   navItems = [],
   navSections,
+  liveAccessEnabled = true,
   onModeChange,
   shellVariant = "merchant",
   subtitle = "Merchant dashboard",
@@ -1157,12 +1159,20 @@ export function AppShell({
                 <p className="mt-1 text-sm font-medium text-text">
                   {mode === "test" ? "Test" : "Live"}
                 </p>
+                {!liveAccessEnabled && mode !== "live" ? (
+                  <p className="mt-1 text-xs text-text-secondary">Live unlocks after KYB approval.</p>
+                ) : null}
               </div>
               <Switch.Root
                 checked={mode === "live"}
-                className="relative h-7 w-12 rounded-full bg-brand-100 outline-none transition data-[state=checked]:bg-brand"
+                disabled={!liveAccessEnabled && mode !== "live"}
+                className="relative h-7 w-12 rounded-full bg-brand-100 outline-none transition disabled:opacity-50 data-[state=checked]:bg-brand"
                 onCheckedChange={(checked) => {
-                  onModeChange(checked ? "live" : "test");
+                  const nextMode = checked ? "live" : "test";
+                  if (nextMode === mode) {
+                    return;
+                  }
+                  onModeChange(nextMode);
                 }}
               >
                 <Switch.Thumb className="block size-5 translate-x-1 rounded-full bg-white shadow-sm transition will-change-transform data-[state=checked]:translate-x-6" />

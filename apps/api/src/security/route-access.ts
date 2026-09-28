@@ -33,6 +33,26 @@ const routeAccessMatchers: RouteAccessMatcher[] = [
     pattern: /^\/health$/
   },
   {
+    access: { auth: "public", explicit_public: true, requirement: null },
+    methods: ["GET"],
+    pattern: /^\/metrics$/
+  },
+  {
+    access: { auth: "public", explicit_public: true, requirement: null },
+    methods: ["GET"],
+    pattern: /^\/status$/
+  },
+  {
+    access: { auth: "public", explicit_public: true, requirement: null },
+    methods: ["GET"],
+    pattern: /^\/v1\/status$/
+  },
+  {
+    access: { auth: "public", explicit_public: true, requirement: null },
+    methods: ["GET"],
+    pattern: /^\/v1\/openapi\.pdf$/
+  },
+  {
     access: {
       auth: "provider_callback",
       explicit_public: true,
@@ -116,6 +136,14 @@ const routeAccessMatchers: RouteAccessMatcher[] = [
       requirement: "sms"
     },
     pattern: /^\/v1\/otp(?:\/.*)?$/
+  },
+  {
+    access: {
+      auth: "api_key",
+      explicit_public: false,
+      requirement: "airtime"
+    },
+    pattern: /^\/v1\/airtime(?:\/.*)?$/
   },
   {
     access: { auth: "public", explicit_public: true, requirement: null },
@@ -225,6 +253,24 @@ const routeAccessMatchers: RouteAccessMatcher[] = [
       requirement: "sms.manage"
     },
     pattern: /^\/dashboard\/v1\/(?:sms|otp|sender-ids)(?:\/.*)?$/
+  },
+  {
+    access: {
+      auth: "dashboard_session",
+      explicit_public: false,
+      requirement: "airtime.send"
+    },
+    methods: ["POST"],
+    pattern: /^\/dashboard\/v1\/airtime(?:\/.*)?$/
+  },
+  {
+    access: {
+      auth: "dashboard_session",
+      explicit_public: false,
+      requirement: "dashboard.authenticated"
+    },
+    methods: ["GET"],
+    pattern: /^\/dashboard\/v1\/airtime(?:\/.*)?$/
   },
   {
     access: {

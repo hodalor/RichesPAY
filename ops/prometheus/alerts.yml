@@ -1,0 +1,52 @@
+groups:
+  - name: richespay
+    rules:
+      - alert: ChannelDown
+        expr: richespay_channel_up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: Channel {{ $labels.channel }} in {{ $labels.country }} is down
+      - alert: ChannelSuccessRateDrop
+        expr: richespay_channel_success_rate_drop == 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Success rate for {{ $labels.channel }} {{ $labels.network }} dropped more than 10 points versus the previous 15 minutes
+      - alert: QueueBacklog
+        expr: richespay_queue_backlog == 1
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Queue {{ $labels.queue }} is above the backlog threshold
+      - alert: LedgerBalanceMismatch
+        expr: richespay_ledger_mismatches > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: Ledger verifyBalances found mismatched accounts
+      - alert: ReconciliationExceptions
+        expr: richespay_reconciliation_exceptions_open > 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Open reconciliation exceptions need review
+      - alert: WebhookEndpointDisabled
+        expr: richespay_webhook_endpoints_disabled > 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: At least one merchant webhook endpoint is disabled
+      - alert: ProviderFloatLow
+        expr: richespay_provider_float_low == 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Provider float for {{ $labels.channel }} in {{ $labels.country }} is below the configured minimum

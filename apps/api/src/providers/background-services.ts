@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 
+import { startAirtimeProcessingLoop } from "../airtime";
 import { startCollectionStatusPollingLoop } from "../collections";
 import { startMerchantDailyStatsLoop } from "../dashboard/stats";
 import type { AppDatabase } from "../db";
@@ -16,6 +17,7 @@ import { createProviderCallbacksWorker } from "./queue";
 export function startProviderBackgroundServices(input: {
   database: AppDatabase;
   encryptionKey: string;
+  floatLowMinor?: bigint;
   logger?: FastifyBaseLogger;
   redisUrl: string;
 }) {
@@ -55,6 +57,12 @@ export function startProviderBackgroundServices(input: {
     ...(input.logger ? { logger: input.logger } : {}),
     providerCatalog: catalog
   });
+  const airtimeLoop = startAirtimeProcessingLoop({
+    database: input.database,
+    floatLowMinor: input.floatLowMinor ?? 1_000_000n,
+    ...(input.logger ? { logger: input.logger } : {}),
+    providerCatalog: catalog
+  });
   const smsWorker = startSmsProcessingWorker({
     database: input.database,
     encryptionKey: input.encryptionKey,
@@ -78,6 +86,7 @@ export function startProviderBackgroundServices(input: {
 
   return {
     async stop() {
+      airtimeLoop.stop();
       collectionLoop.stop();
       healthLoop.stop();
       merchantStatsLoop.stop();

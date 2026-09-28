@@ -4,6 +4,9 @@ import ipaddr from "ipaddr.js";
 
 import type { AppDatabase } from "../db";
 import type {
+  AirtimeFloatBalance,
+  AirtimeNetworkOffer,
+  AirtimeProvider,
   BankPayoutProvider,
   CardAcquirer,
   ChannelRecord,
@@ -16,29 +19,36 @@ import type {
   SmsMessageRequest,
   SmsProvider
 } from "./types";
+import { AirtelAirtimeProvider } from "./airtel_airtime";
 import { AirtelMoneyProvider } from "./airtel_money";
+import { AirtimeAggregatorProvider } from "./airtime_aggregator";
+import { AtAirtimeProvider } from "./at_airtime";
 import { AtMoneyProvider } from "./at_money";
 import { GenericBankPayoutProvider } from "./bank_generic";
 import { GenericCardAcquirer } from "./card_generic";
 import { CredentialEncryptionService } from "./crypto";
 import { HttpProviderClient } from "./http-client";
+import { MtnAirtimeProvider } from "./mtn_airtime";
 import { MtnMomoProvider } from "./mtn_momo";
 import { HttpSmsProvider } from "./sms_http";
 import { SmppSmsProvider } from "./sms_smpp";
+import { TelecelAirtimeProvider } from "./telecel_airtime";
 import { TelecelCashProvider } from "./telecel_cash";
 import {
+  SimulatorAirtimeProvider,
   SimulatorBankPayoutProvider,
   SimulatorCardAcquirer,
   SimulatorMobileMoneyProvider,
   SimulatorSmsProvider
 } from "./simulator";
 import { NoopScreeningProvider } from "./screening";
+import { ZamtelAirtimeProvider } from "./zamtel_airtime";
 import { ZamtelMoneyProvider } from "./zamtel_money";
 
 export class ProviderCatalog {
   #adapterCache = new Map<
     string,
-    BankPayoutProvider | CardAcquirer | MobileMoneyProvider | SmsProvider
+    AirtimeProvider | BankPayoutProvider | CardAcquirer | MobileMoneyProvider | SmsProvider
   >();
   #encryption: CredentialEncryptionService | null;
   #transport: ProviderHttpTransport | null;
@@ -148,6 +158,47 @@ export class ProviderCatalog {
           });
         default:
           return new PassiveSmsProvider(channel.providerCode, channel.config);
+      }
+    })();
+
+    this.#adapterCache.set(channel.id, adapter);
+    return adapter;
+  }
+
+  resolveAirtimeProvider(channel: ChannelRecord): AirtimeProvider {
+    if (channel.providerCode === "simulator") {
+      return new SimulatorAirtimeProvider();
+    }
+
+    const cached = this.#adapterCache.get(channel.id);
+    if (cached) {
+      return cached as AirtimeProvider;
+    }
+
+    const adapterInput = {
+      channelId: channel.id,
+      config: channel.config,
+      countryCode: channel.countryCode,
+      credentials: this.#decryptCredentials(channel.credentialsEncrypted),
+      transport: this.#requireTransport(channel.providerCode)
+    };
+
+    const adapter = (() => {
+      switch (channel.providerCode) {
+        case "airtel_airtime":
+          return new AirtelAirtimeProvider(adapterInput);
+        case "airtime_aggregator":
+          return new AirtimeAggregatorProvider(adapterInput);
+        case "at_airtime":
+          return new AtAirtimeProvider(adapterInput);
+        case "mtn_airtime":
+          return new MtnAirtimeProvider(adapterInput);
+        case "telecel_airtime":
+          return new TelecelAirtimeProvider(adapterInput);
+        case "zamtel_airtime":
+          return new ZamtelAirtimeProvider(adapterInput);
+        default:
+          return new PassiveAirtimeProvider(channel.providerCode, channel.config);
       }
     })();
 
@@ -284,6 +335,54 @@ class PassiveSmsProvider implements SmsProvider {
 
   async send(msg: SmsMessageRequest): Promise<ProviderResult> {
     return accepted(this.#providerCode, `queued:${msg.reference}`, this.#config);
+  }
+}
+
+class PassiveAirtimeProvider implements AirtimeProvider {
+  #providerCode: string;
+  #config: unknown;
+
+  constructor(providerCode: string, config: unknown) {
+    this.#providerCode = providerCode;
+    this.#config = config;
+  }
+
+  async listNetworks(): Promise<AirtimeNetworkOffer[]> {
+    return [];
+  }
+
+  async sendAirtime(): Promise<ProviderResult> {
+    return {
+      failureCode: "airtime_unavailable",
+      outcome: "failed",
+      providerStatus: "not_sent",
+      rawRedacted: { provider_code: this.#providerCode, reason: "adapter_not_configured" }
+    };
+  }
+
+  async getStatus(ref: string): Promise<ProviderResult> {
+    return unknown(this.#providerCode, ref, this.#config);
+  }
+
+  async getFloatBalance(): Promise<AirtimeFloatBalance> {
+    return { balanceMinor: null, currency: null, rawRedacted: null };
+  }
+
+  async healthCheck(): Promise<ProviderResult> {
+    return {
+      outcome: "unknown",
+      providerRef: this.#providerCode,
+      providerStatus: "not_configured",
+      rawRedacted: null
+    };
+  }
+
+  async parseCallback(rawBody: string): Promise<NormalizedEvent> {
+    return parsePassiveCallback(rawBody);
+  }
+
+  verifyCallback(input: ProviderCallbackVerificationInput): boolean {
+    return verifyPassiveCallback(input, this.#config);
   }
 }
 

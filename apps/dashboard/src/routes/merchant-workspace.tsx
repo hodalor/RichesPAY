@@ -16,6 +16,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Smartphone,
   Users
 } from "lucide-react";
 import {
@@ -44,7 +45,7 @@ import {
   type DateRangeValue,
   type SidebarSection
 } from "@richespay/ui";
-import { formatMoney } from "@richespay/shared";
+import { formatMoney, fromMinor, toMinor, type CurrencyCode } from "@richespay/shared";
 
 import { ApiError, apiRequest } from "../api-client";
 import { env } from "../env";
@@ -68,9 +69,12 @@ interface MembershipSummary {
 
 interface SessionData {
   active_products: {
+    airtime: boolean;
     collections: boolean;
     payouts: boolean;
     sms: boolean;
+    sms_api: boolean;
+    sms_broadcast: boolean;
   };
   compliance: {
     collections_freeze_category: string | null;
@@ -119,6 +123,9 @@ interface SummaryData {
   };
   overview: {
     cards: {
+      airtime_sent_today: number;
+      airtime_spend_this_month_minor: number;
+      airtime_success_rate: number;
       available_balance_minor: number;
       collected_today_minor: number;
       paid_out_today_minor: number;
@@ -138,7 +145,7 @@ interface SummaryData {
       created_at: string;
       currency: string;
       id: string;
-      kind: "collection" | "payout" | "sms";
+      kind: "airtime" | "collection" | "payout" | "sms";
       reference: string | null;
       status: string;
     }>;
@@ -257,6 +264,106 @@ interface BroadcastRow {
   status: string;
   total_count: number;
   type: string;
+}
+
+interface AirtimeOrderRow {
+  amount: number;
+  batch_id: string | null;
+  charge_amount: number;
+  charge_currency: string;
+  completed_at: string | null;
+  country_code: string;
+  created_at: string;
+  currency: string;
+  discount_minor: number;
+  failure_code: string | null;
+  fx_rate?: number | null;
+  id: string;
+  network: string;
+  phone: string;
+  phone_masked?: string;
+  reference: string | null;
+  status: "pending" | "processing" | "successful" | "failed";
+}
+
+interface AirtimeOrderDetail extends AirtimeOrderRow {
+  event_timeline: Array<{
+    created_at: string;
+    from_status: string | null;
+    provider_reference: string | null;
+    reason: string | null;
+    to_status: string;
+  }>;
+  fx_rate: number | null;
+  phone_masked: string;
+}
+
+interface AirtimeBatchRow {
+  accepted: number;
+  charge_currency: string;
+  completed_at: string | null;
+  created_at: string;
+  failed: number;
+  id: string;
+  reference: string | null;
+  rejected: number;
+  status: "processing" | "completed";
+  successful: number;
+  total_charge: number;
+  total_items: number;
+}
+
+interface AirtimeSummaryData {
+  failed: number;
+  failed_today: number;
+  pending: number;
+  sent: number;
+  sent_today: number;
+  spend_minor: number;
+  spent_this_month_minor: number;
+  spent_today_minor: number;
+  success_rate: number | null;
+  successful: number;
+  successful_today: number;
+}
+
+interface AirtimeQuoteData {
+  amount: number;
+  charge_amount: number;
+  charge_currency: string;
+  country_code: string;
+  currency: string;
+  discount_bps: number;
+  discount_minor: number;
+  fixed_denominations: number[] | null;
+  fx_rate_id: string | null;
+  max_amount: number;
+  min_amount: number;
+  network: string;
+  phone: string;
+}
+
+interface CatalogProductRow {
+  active: boolean;
+  key: "airtime" | "collections" | "payouts" | "sms";
+  requested: boolean;
+}
+
+interface AirtimeContactGroupRow {
+  contact_count: number;
+  id: string;
+  name: string;
+  phones: string[];
+}
+
+interface AirtimeNetworkRow {
+  country_code: string;
+  currency: string;
+  discount_bps: number;
+  fixed_denominations: number[] | null;
+  max_amount: number;
+  min_amount: number;
+  network: string;
 }
 
 interface ContactRow {
@@ -429,6 +536,9 @@ const webhookEventOptions = [
   { description: "Bulk payout batches that finished processing.", label: "payout_batch.completed", value: "payout_batch.completed" },
   { description: "SMS delivery confirmations.", label: "sms.delivered", value: "sms.delivered" },
   { description: "SMS delivery failures.", label: "sms.failed", value: "sms.failed" },
+  { description: "Airtime top-ups that completed.", label: "airtime.successful", value: "airtime.successful" },
+  { description: "Airtime top-ups that failed.", label: "airtime.failed", value: "airtime.failed" },
+  { description: "Airtime batches that finished processing.", label: "airtime_batch.completed", value: "airtime_batch.completed" },
   { description: "Low balance alerts for funded products.", label: "balance.low", value: "balance.low" },
   { description: "Merchant collections freeze notifications.", label: "merchant.collections_frozen", value: "merchant.collections_frozen" },
   { description: "Merchant payouts freeze notifications.", label: "merchant.payouts_frozen", value: "merchant.payouts_frozen" },
@@ -438,6 +548,7 @@ const apiKeyScopeOptions = [
   { description: "Collections and checkout payments.", label: "Collections", value: "collections" },
   { description: "Single and bulk payouts.", label: "Payouts", value: "payouts" },
   { description: "SMS, bulk SMS, and OTP.", label: "SMS", value: "sms" },
+  { description: "Single and bulk airtime top-ups.", label: "Airtime", value: "airtime" },
   { description: "Read-only balance and listing endpoints.", label: "Read", value: "read" }
 ] as const;
 const httpMethodOptions = [
@@ -503,6 +614,57 @@ function dateRangeToQuery(value: DateRangeValue) {
     end_date: end.toISOString().slice(0, 10),
     start_date: start.toISOString().slice(0, 10)
   };
+}
+
+function maskRecipient(phone: string) {
+  if (phone.length <= 7) {
+    return "***";
+  }
+
+  return `${phone.slice(0, 5)}***${phone.slice(-3)}`;
+}
+
+function parseMajorAmount(value: string, currency: string) {
+  try {
+    const amount = toMinor(value.trim() === "" ? "0" : value.trim(), currency as CurrencyCode);
+    return Number(amount);
+  } catch {
+    return Number.NaN;
+  }
+}
+
+function parseAirtimeCsv(text: string, fallbackAmount: number | null) {
+  const rows = text
+    .split(/\r?\n/)
+    .map((line) => line.split(/[,;\t]/).map((cell) => cell.trim().replace(/^"|"$/g, "")))
+    .filter((cells) => cells.some((cell) => cell !== ""));
+
+  if (rows.length > 0 && !/\d{4,}/.test(rows[0]?.[0] ?? "")) {
+    rows.shift();
+  }
+
+  return rows.map((cells, index) => {
+    const phone = (cells[0] ?? "").replace(/[^\d+]/g, "");
+    const amountCell = cells[1] ?? "";
+    const amount =
+      amountCell !== ""
+        ? Number(amountCell)
+        : fallbackAmount ?? Number.NaN;
+    const validPhone = /^\+\d{8,15}$/.test(phone);
+    const validAmount = Number.isSafeInteger(amount) && amount > 0;
+
+    return {
+      amount,
+      error: !validPhone
+        ? "Invalid number"
+        : !validAmount
+          ? "Invalid amount"
+          : null,
+      index,
+      phone,
+      valid: validPhone && validAmount
+    };
+  });
 }
 
 function parseDelimitedRecipients(raw: string) {
@@ -693,6 +855,19 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
   const [selectedLogRequestId, setSelectedLogRequestId] = React.useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = React.useState<string | null>(null);
   const [broadcastOpen, setBroadcastOpen] = React.useState(false);
+  const [airtimeOpen, setAirtimeOpen] = React.useState(false);
+  const [airtimeConfirmOpen, setAirtimeConfirmOpen] = React.useState(false);
+  const [airtimeMode, setAirtimeMode] = React.useState<"single" | "bulk">("single");
+  const [airtimePhone, setAirtimePhone] = React.useState("");
+  const [airtimeAmount, setAirtimeAmount] = React.useState("10.00");
+  const [airtimeReference, setAirtimeReference] = React.useState("");
+  const [airtimePhonesText, setAirtimePhonesText] = React.useState("");
+  const [airtimeCsv, setAirtimeCsv] = React.useState("");
+  const [airtimeGroupId, setAirtimeGroupId] = React.useState("");
+  const [airtimeSending, setAirtimeSending] = React.useState(false);
+  const [airtimeNetworkFilter, setAirtimeNetworkFilter] = React.useState("");
+  const [selectedAirtimeId, setSelectedAirtimeId] = React.useState<string | null>(null);
+  const [selectedAirtimeBatchId, setSelectedAirtimeBatchId] = React.useState<string | null>(null);
   const [composeMessage, setComposeMessage] = React.useState("");
   const [composeSenderId, setComposeSenderId] = React.useState("");
   const [composeType, setComposeType] = React.useState("marketing");
@@ -720,7 +895,13 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
   const [newApiKeyMode, setNewApiKeyMode] = React.useState<MerchantMode>("test");
   const [apiKeyModeFilter, setApiKeyModeFilter] = React.useState("");
   const [newApiKeyIpAllowlist, setNewApiKeyIpAllowlist] = React.useState("");
-  const [newApiKeyScopes, setNewApiKeyScopes] = React.useState<string[]>(["collections", "payouts", "sms", "read"]);
+  const [newApiKeyScopes, setNewApiKeyScopes] = React.useState<string[]>(["collections", "payouts", "sms", "airtime", "read"]);
+  const [requestingProduct, setRequestingProduct] = React.useState<string | null>(null);
+  const [creatingApiKey, setCreatingApiKey] = React.useState(false);
+  const [inviteOpen, setInviteOpen] = React.useState(false);
+  const [inviteEmail, setInviteEmail] = React.useState("");
+  const [inviteRole, setInviteRole] = React.useState("developer");
+  const [inviting, setInviting] = React.useState(false);
   const [apiKeySecret, setApiKeySecret] = React.useState<{
     key: string;
     mode: MerchantMode;
@@ -902,6 +1083,134 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
         accessToken: auth.accessToken,
         merchantId
       })
+  });
+
+  const airtimeSummaryQuery = useQuery({
+    enabled: Boolean(auth.accessToken && merchantId && currentPage === "/airtime"),
+    queryKey: ["dashboard-airtime-summary", auth.accessToken, merchantId, dateRange],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      const dateQuery = dateRangeToQuery(dateRange);
+      if (dateQuery.start_date) {
+        params.set("created_gte", `${dateQuery.start_date}T00:00:00.000Z`);
+      }
+      if (dateQuery.end_date) {
+        params.set("created_lte", `${dateQuery.end_date}T23:59:59.999Z`);
+      }
+      return apiRequest<AirtimeSummaryData>(`/dashboard/v1/airtime/summary?${params.toString()}`, {
+        accessToken: auth.accessToken,
+        merchantId
+      });
+    }
+  });
+
+  const airtimeNetworksQuery = useQuery({
+    enabled: Boolean(auth.accessToken && merchantId && (currentPage === "/airtime" || airtimeOpen)),
+    queryKey: ["dashboard-airtime-networks", auth.accessToken, merchantId],
+    queryFn: () =>
+      apiRequest<AirtimeNetworkRow[]>("/dashboard/v1/airtime/networks", {
+        accessToken: auth.accessToken,
+        merchantId
+      })
+  });
+
+  const airtimeOrdersQuery = useQuery({
+    enabled: Boolean(auth.accessToken && merchantId && currentPage === "/airtime"),
+    queryKey: ["dashboard-airtime-orders", auth.accessToken, merchantId, dateRange, search, statusFilter, airtimeNetworkFilter],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      const dateQuery = dateRangeToQuery(dateRange);
+      if (dateQuery.start_date) {
+        params.set("created_gte", `${dateQuery.start_date}T00:00:00.000Z`);
+      }
+      if (dateQuery.end_date) {
+        params.set("created_lte", `${dateQuery.end_date}T23:59:59.999Z`);
+      }
+      if (statusFilter) {
+        params.set("status", statusFilter);
+      }
+      if (airtimeNetworkFilter) {
+        params.set("network", airtimeNetworkFilter);
+      }
+      if (search) {
+        params.set("phone", search);
+      }
+      return apiRequest<AirtimeOrderRow[]>(
+        `/dashboard/v1/airtime?${params.toString()}`,
+        {
+          accessToken: auth.accessToken,
+          merchantId
+        }
+      );
+    }
+  });
+
+  const airtimeBatchesQuery = useQuery({
+    enabled: Boolean(auth.accessToken && merchantId && currentPage === "/airtime"),
+    queryKey: ["dashboard-airtime-batches", auth.accessToken, merchantId],
+    queryFn: () =>
+      apiRequest<AirtimeBatchRow[]>("/dashboard/v1/airtime/batches", {
+        accessToken: auth.accessToken,
+        merchantId
+      })
+  });
+
+  const airtimeDetailQuery = useQuery({
+    enabled: Boolean(auth.accessToken && merchantId && selectedAirtimeId),
+    queryKey: ["dashboard-airtime-detail", auth.accessToken, merchantId, selectedAirtimeId],
+    queryFn: () =>
+      apiRequest<AirtimeOrderDetail>(`/dashboard/v1/airtime/${selectedAirtimeId}`, {
+        accessToken: auth.accessToken,
+        merchantId
+      })
+  });
+
+  const airtimeGroupsQuery = useQuery({
+    enabled: Boolean(auth.accessToken && merchantId && airtimeOpen),
+    queryKey: ["dashboard-airtime-groups", auth.accessToken, merchantId],
+    queryFn: () =>
+      apiRequest<AirtimeContactGroupRow[]>("/dashboard/v1/airtime/contact-groups", {
+        accessToken: auth.accessToken,
+        merchantId
+      })
+  });
+
+  const productsCatalogQuery = useQuery({
+    enabled: Boolean(auth.accessToken && merchantId && currentPage === "/settings"),
+    queryKey: ["dashboard-products", auth.accessToken, merchantId],
+    queryFn: () =>
+      apiRequest<CatalogProductRow[]>("/dashboard/v1/products", {
+        accessToken: auth.accessToken,
+        merchantId
+      })
+  });
+
+  const airtimeAmountMinor = parseMajorAmount(airtimeAmount, currency);
+  const airtimeQuoteQuery = useQuery({
+    enabled: Boolean(
+      auth.accessToken &&
+        merchantId &&
+        airtimeOpen &&
+        airtimePhone.replace(/[^\d+]/g, "").length >= 8
+    ),
+    queryKey: [
+      "dashboard-airtime-quote",
+      auth.accessToken,
+      merchantId,
+      airtimePhone,
+      Number.isSafeInteger(airtimeAmountMinor) ? airtimeAmountMinor : 0
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams({ phone: airtimePhone.trim() });
+      if (Number.isSafeInteger(airtimeAmountMinor) && airtimeAmountMinor > 0) {
+        params.set("amount", String(airtimeAmountMinor));
+      }
+      return apiRequest<AirtimeQuoteData>(`/dashboard/v1/airtime/quote?${params.toString()}`, {
+        accessToken: auth.accessToken,
+        merchantId
+      });
+    },
+    retry: 0
   });
 
   const contactsQuery = useQuery({
@@ -1087,24 +1396,48 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
       });
     }
 
-    if (session.active_products.sms) {
+    if (session.active_products.airtime) {
       sections.push({
-        label: "Messaging",
-        items: [
-          { href: "/app/messages", icon: <MessageSquareText className="size-4" />, label: "Messages" },
-          { href: "/app/sender-ids", icon: <Send className="size-4" />, label: "Sender IDs" },
-          { href: "/app/contacts", icon: <Phone className="size-4" />, label: "Contacts" }
-        ]
+        label: "Airtime",
+        items: [{ href: "/app/airtime", icon: <Smartphone className="size-4" />, label: "Airtime" }]
       });
     }
 
+    if (session.active_products.sms_broadcast || session.active_products.sms) {
+      const messaging = [
+        ...(session.active_products.sms_broadcast
+          ? [
+              { href: "/app/messages", icon: <MessageSquareText className="size-4" />, label: "Broadcast" },
+              { href: "/app/contacts", icon: <Phone className="size-4" />, label: "Contacts" }
+            ]
+          : []),
+        ...(session.active_products.sms_api || session.active_products.sms_broadcast
+          ? [{ href: "/app/sender-ids", icon: <Send className="size-4" />, label: "Sender IDs" }]
+          : [])
+      ];
+
+      if (messaging.length > 0) {
+        sections.push({
+          label: "Messaging",
+          items: messaging
+        });
+      }
+    }
+
+    const operationItems = [
+      { href: "/app/balance", icon: <CircleDollarSign className="size-4" />, label: "Balance" },
+      ...(session.active_products.collections ||
+      session.active_products.payouts ||
+      session.active_products.sms_api ||
+      session.active_products.airtime
+        ? [{ href: "/app/developers", icon: <KeyRound className="size-4" />, label: "Developers" }]
+        : []),
+      { href: "/app/settings", icon: <Settings className="size-4" />, label: "Settings" }
+    ];
+
     sections.push({
       label: "Operations",
-      items: [
-        { href: "/app/balance", icon: <CircleDollarSign className="size-4" />, label: "Balance" },
-        { href: "/app/developers", icon: <KeyRound className="size-4" />, label: "Developers" },
-        { href: "/app/settings", icon: <Settings className="size-4" />, label: "Settings" }
-      ]
+      items: operationItems
     });
 
     return sections;
@@ -1190,17 +1523,52 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
     ],
     [eventsOutboxQuery.data]
   );
-  const publicDocsUrl = new URL("/v1/openapi.json", env.apiBaseUrl).toString();
+  const airtimePreviewRows = React.useMemo(() => {
+    const selectedGroup = (airtimeGroupsQuery.data ?? []).find((group) => group.id === airtimeGroupId);
+    if (airtimeCsv.trim()) {
+      return parseAirtimeCsv(airtimeCsv, Number.isSafeInteger(airtimeAmountMinor) ? airtimeAmountMinor : null);
+    }
+
+    const phones = [
+      ...parseDelimitedRecipients(airtimePhonesText).map((row) => row.phone),
+      ...(selectedGroup?.phones ?? [])
+    ];
+    const unique = Array.from(new Set(phones.filter(Boolean)));
+    return unique.map((phone, index) => {
+      const validPhone = /^\+\d{8,15}$/.test(phone);
+      const validAmount = Number.isSafeInteger(airtimeAmountMinor) && airtimeAmountMinor > 0;
+      return {
+        amount: airtimeAmountMinor,
+        error: !validPhone ? "Invalid number" : !validAmount ? "Invalid amount" : null,
+        index,
+        phone,
+        valid: validPhone && validAmount
+      };
+    });
+  }, [airtimeAmountMinor, airtimeCsv, airtimeGroupId, airtimeGroupsQuery.data, airtimePhonesText]);
+
+  const publicDocsUrl = new URL("/v1/openapi.pdf", env.apiBaseUrl).toString();
   const testSecretKeyPrefix =
     apiKeysQuery.data?.find(
       (row) => row.mode === "test" && row.kind === "secret" && !row.revoked_at
     )?.prefix ?? "rp_test_sk_";
   const quickStartCurl = React.useMemo(() => {
-    const docsUrl = new URL("/v1/openapi.json", env.apiBaseUrl).toString();
+    const docsUrl = new URL("/v1/openapi.pdf", env.apiBaseUrl).toString();
     const authorization = `${testSecretKeyPrefix}<replace-with-secret>`;
 
+    const airtimeCurl = `curl --request POST "${new URL("/v1/airtime", env.apiBaseUrl).toString()}" \\
+  --header "Authorization: Bearer ${authorization}" \\
+  --header "Idempotency-Key: reward-221" \\
+  --header "Content-Type: application/json" \\
+  --data '{
+    "phone": "+260970000001",
+    "amount": 1000,
+    "currency": "ZMW",
+    "reference": "REWARD-221"
+  }'`;
+
     if (session?.active_products.collections) {
-      return `curl --request POST "${new URL("/v1/collections", env.apiBaseUrl).toString()}" \\
+      const collectionsCurl = `curl --request POST "${new URL("/v1/collections", env.apiBaseUrl).toString()}" \\
   --header "Authorization: Bearer ${authorization}" \\
   --header "Idempotency-Key: demo-collection-0001" \\
   --header "Content-Type: application/json" \\
@@ -1211,13 +1579,25 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
     "phone": "+233240000001",
     "reference": "demo-collection-0001",
     "description": "Quick start test payment"
-  }'
+  }'`;
+      return `${session.active_products.airtime ? `${collectionsCurl}
+
+# Send a test airtime top-up. Numbers ending in 0001 succeed.
+${airtimeCurl}` : collectionsCurl}
 
 # Public docs: ${docsUrl}`;
     }
 
+    const withAirtime = (primary: string) =>
+      session?.active_products.airtime
+        ? `${primary}
+
+# Send a test airtime top-up. Numbers ending in 0001 succeed.
+${airtimeCurl}`
+        : primary;
+
     if (session?.active_products.sms) {
-      return `curl --request POST "${new URL("/v1/sms", env.apiBaseUrl).toString()}" \\
+      return `${withAirtime(`curl --request POST "${new URL("/v1/sms", env.apiBaseUrl).toString()}" \\
   --header "Authorization: Bearer ${authorization}" \\
   --header "Idempotency-Key: demo-sms-0001" \\
   --header "Content-Type: application/json" \\
@@ -1225,13 +1605,13 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
     "to": "+233240000001",
     "message": "Hello from RichesPay test mode",
     "type": "transactional"
-  }'
+  }'`)}
 
 # Public docs: ${docsUrl}`;
     }
 
     if (session?.active_products.payouts) {
-      return `curl --request POST "${new URL("/v1/payouts", env.apiBaseUrl).toString()}" \\
+      return `${withAirtime(`curl --request POST "${new URL("/v1/payouts", env.apiBaseUrl).toString()}" \\
   --header "Authorization: Bearer ${authorization}" \\
   --header "Idempotency-Key: demo-payout-0001" \\
   --header "Content-Type: application/json" \\
@@ -1241,7 +1621,13 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
     "method": "mobile_money",
     "phone": "+233240000001",
     "reference": "demo-payout-0001"
-  }'
+  }'`)}
+
+# Public docs: ${docsUrl}`;
+    }
+
+    if (session?.active_products.airtime) {
+      return `${airtimeCurl}
 
 # Public docs: ${docsUrl}`;
     }
@@ -1250,7 +1636,7 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
   --header "Authorization: Bearer ${authorization}"
 
 # Public docs: ${docsUrl}`;
-  }, [currency, session?.active_products.collections, session?.active_products.payouts, session?.active_products.sms, testSecretKeyPrefix]);
+  }, [currency, session?.active_products.airtime, session?.active_products.collections, session?.active_products.payouts, session?.active_products.sms, testSecretKeyPrefix]);
 
   const recipientRows = parseDelimitedRecipients(composeRecipients);
   const validRecipientRows = recipientRows.filter((row) => row.valid);
@@ -1309,6 +1695,153 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
       });
     }
   }
+
+  async function handleAirtimeSend() {
+    if (!auth.accessToken || !merchantId || airtimeSending) {
+      return;
+    }
+
+    const singleAmount = airtimeQuoteQuery.data?.amount ?? airtimeAmountMinor;
+    const validBulk = airtimePreviewRows.filter((row) => row.valid);
+    const sendingBulk = airtimeMode === "bulk";
+
+    if (!sendingBulk && (!airtimePhone.trim() || !Number.isSafeInteger(singleAmount) || singleAmount <= 0)) {
+      pushToast({
+        title: "Send airtime failed",
+        description: "Enter a valid phone number and amount.",
+        variant: "danger"
+      });
+      return;
+    }
+
+    if (sendingBulk && validBulk.length === 0) {
+      pushToast({
+        title: "Send airtime failed",
+        description: "Add at least one valid recipient.",
+        variant: "danger"
+      });
+      return;
+    }
+
+    setAirtimeSending(true);
+    try {
+      const idempotencyKey =
+        typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `airtime-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+      if (!sendingBulk) {
+        await apiRequest<AirtimeOrderRow>("/dashboard/v1/airtime", {
+          accessToken: auth.accessToken,
+          body: JSON.stringify({
+            amount: singleAmount,
+            currency: airtimeQuoteQuery.data?.currency ?? currency,
+            phone: airtimePhone.trim(),
+            ...(airtimeReference.trim() ? { reference: airtimeReference.trim() } : {})
+          }),
+          headers: { "Idempotency-Key": idempotencyKey },
+          merchantId,
+          method: "POST"
+        });
+      } else {
+        await apiRequest<unknown>("/dashboard/v1/airtime/bulk", {
+          accessToken: auth.accessToken,
+          body: JSON.stringify({
+            ...(airtimeCsv.trim()
+              ? { csv: airtimeCsv }
+              : {
+                  amount: airtimeAmountMinor,
+                  currency: airtimeQuoteQuery.data?.currency ?? currency,
+                  phones_text: validBulk.map((row) => row.phone).join("\n")
+                }),
+            ...(airtimeReference.trim() ? { reference: airtimeReference.trim() } : {})
+          }),
+          headers: { "Idempotency-Key": idempotencyKey },
+          merchantId,
+          method: "POST"
+        });
+      }
+
+      setAirtimeOpen(false);
+      setAirtimeConfirmOpen(false);
+      setAirtimePhone("");
+      setAirtimePhonesText("");
+      setAirtimeCsv("");
+      setAirtimeGroupId("");
+      setAirtimeReference("");
+      pushToast({
+        title: "Airtime queued",
+        description: sendingBulk ? "The bulk top-up batch is now processing." : "The top-up is now processing.",
+        variant: "success"
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard-airtime-orders"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard-airtime-batches"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard-airtime-summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] })
+      ]);
+    } catch (error) {
+      pushToast({
+        title: "Send airtime failed",
+        description: error instanceof ApiError ? error.message : "Unable to send airtime.",
+        variant: "danger"
+      });
+    } finally {
+      setAirtimeSending(false);
+    }
+  }
+
+  async function handleProductRequest(product: CatalogProductRow["key"]) {
+    if (!auth.accessToken || !merchantId || requestingProduct) {
+      return;
+    }
+
+    setRequestingProduct(product);
+    try {
+      await apiRequest("/dashboard/v1/products/request", {
+        accessToken: auth.accessToken,
+        body: JSON.stringify({ product }),
+        merchantId,
+        method: "POST"
+      });
+      pushToast({
+        description: "RichesPay will review this product the same way as your other products.",
+        title: "Product requested",
+        variant: "success"
+      });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-products"] });
+    } catch (error) {
+      pushToast({
+        description: error instanceof ApiError ? error.message : "Unable to request this product.",
+        title: "Request failed",
+        variant: "danger"
+      });
+    } finally {
+      setRequestingProduct(null);
+    }
+  }
+
+  const validAirtimeRows = airtimePreviewRows.filter((row) => row.valid);
+  const airtimeFaceTotal =
+    airtimeMode === "single"
+      ? (airtimeQuoteQuery.data?.amount ?? (Number.isSafeInteger(airtimeAmountMinor) ? airtimeAmountMinor : 0))
+      : validAirtimeRows.reduce((sum, row) => sum + row.amount, 0);
+  const airtimeUnitCharge = airtimeQuoteQuery.data?.charge_amount ?? 0;
+  const airtimeUnitFace = airtimeQuoteQuery.data?.amount || airtimeAmountMinor || 1;
+  const airtimeCostTotal =
+    airtimeMode === "single"
+      ? airtimeUnitCharge
+      : Math.round(
+          validAirtimeRows.reduce(
+            (sum, row) => sum + (row.amount * airtimeUnitCharge) / airtimeUnitFace,
+            0
+          )
+        );
+  const airtimeBalance = summaryQuery.data?.balance.available_minor ?? 0;
+  const airtimeBalanceAfter = airtimeBalance - airtimeCostTotal;
+  const airtimeBalanceTooLow = airtimeCostTotal > 0 && airtimeBalanceAfter < 0;
+  const airtimeQuoteNetwork = airtimeQuoteQuery.data;
+  const airtimeFixedDenoms = airtimeQuoteNetwork?.fixed_denominations ?? [];
 
   async function handleSharePaymentLink(link: PaymentLinkRow) {
     if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
@@ -1426,10 +1959,11 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
   }
 
   async function handleCreateApiKey() {
-    if (!auth.accessToken || !merchantId || newApiKeyScopes.length === 0) {
+    if (!auth.accessToken || !merchantId || newApiKeyScopes.length === 0 || creatingApiKey) {
       return;
     }
 
+    setCreatingApiKey(true);
     try {
       const created = await apiRequest<ApiKeyRow & { key: string }>("/dashboard/v1/api-keys", {
         accessToken: auth.accessToken,
@@ -1466,6 +2000,8 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
         description: error instanceof ApiError ? error.message : "Unable to create the API key.",
         variant: "danger"
       });
+    } finally {
+      setCreatingApiKey(false);
     }
   }
 
@@ -1631,7 +2167,10 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
   }
 
   const sessionError = sessionQuery.error;
+  const membershipsError = membershipsQuery.error;
   const mfaRequired = sessionError instanceof ApiError && sessionError.code === "mfa_required";
+  const accessPending = membershipsQuery.isLoading || sessionQuery.isLoading || mfaRequired;
+  const [accessWaitExpired, setAccessWaitExpired] = React.useState(false);
 
   React.useEffect(() => {
     if (!mfaRequired) {
@@ -1644,12 +2183,62 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
     });
   }, [mfaRequired]);
 
-  if (membershipsQuery.isLoading || sessionQuery.isLoading || mfaRequired) {
+  React.useEffect(() => {
+    if (!accessPending) {
+      setAccessWaitExpired(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => setAccessWaitExpired(true), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [accessPending]);
+
+  function escapeActions() {
+    return (
+      <div className="flex flex-wrap justify-center gap-3">
+        <Button
+          onClick={() => {
+            void queryClient.invalidateQueries({ queryKey: ["dashboard-memberships"] });
+            void queryClient.invalidateQueries({ queryKey: ["dashboard-session"] });
+          }}
+          variant="primary"
+        >
+          Try again
+        </Button>
+        <Button onClick={() => void auth.signOutEverywhere()} variant="secondary">
+          Sign out
+        </Button>
+      </div>
+    );
+  }
+
+  if (accessPending) {
     return (
       <div className="p-8">
         <EmptyState
-          description={mfaRequired ? "Merchant owners need an authenticator code before the workspace opens." : "Checking your merchant access."}
+          action={accessWaitExpired ? escapeActions() : undefined}
+          description={
+            mfaRequired
+              ? "Merchant owners need an authenticator code before the workspace opens."
+              : "Checking your merchant access."
+          }
           title={mfaRequired ? "Set up two-factor authentication" : "One moment"}
+        />
+      </div>
+    );
+  }
+
+  if (membershipsError) {
+    return (
+      <div className="p-8">
+        <EmptyState
+          action={escapeActions()}
+          description={
+            membershipsError instanceof ApiError
+              ? membershipsError.message
+              : "The merchant list could not be loaded."
+          }
+          title="Merchant access unavailable"
         />
       </div>
     );
@@ -1667,6 +2256,9 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
               <Link to="/accept-invite">
                 <Button variant="secondary">Accept invite</Button>
               </Link>
+              <Button onClick={() => void auth.signOutEverywhere()} variant="secondary">
+                Sign out
+              </Button>
             </div>
           }
           description="This login is not a member of a merchant. Sign in with the account that created the business, create a merchant, or open an invitation link."
@@ -1680,6 +2272,7 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
     return (
       <div className="p-8">
         <EmptyState
+          action={escapeActions()}
           description={
             sessionError instanceof ApiError
               ? sessionError.message
@@ -1695,9 +2288,17 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
     <>
       <AppShell
         activePath={location.pathname}
+        liveAccessEnabled={(membershipsQuery.data ?? []).some(
+          (membership) =>
+            membership.mode === "live" && membership.merchant_name === session.merchant_name
+        )}
         mode={session.mode}
         navSections={navSections}
         onModeChange={(mode) => {
+          if (mode === session.mode) {
+            return;
+          }
+
           const alternative = (membershipsQuery.data ?? []).find(
             (membership) =>
               membership.mode === mode &&
@@ -1706,8 +2307,11 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
 
           if (!alternative) {
             pushToast({
-              title: "Mode not available",
-              description: `No ${mode} membership is available for this merchant yet.`,
+              title: mode === "live" ? "Live access is locked" : "Test mode is unavailable",
+              description:
+                mode === "live"
+                  ? "Finish KYB and wait for approval before live money movement."
+                  : "This merchant does not have a sandbox account.",
               variant: "warning"
             });
             return;
@@ -1753,21 +2357,59 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
                   label="Available balance"
                   value={<MoneyText amountMinor={BigInt(summaryQuery.data?.overview.cards.available_balance_minor ?? 0)} currency={currency as never} />}
                 />
-                <SummaryCard
-                  icon={<CreditCard className="size-4" />}
-                  label="Collected today"
-                  value={<MoneyText amountMinor={BigInt(summaryQuery.data?.overview.cards.collected_today_minor ?? 0)} currency={currency as never} />}
-                />
-                <SummaryCard
-                  icon={<Landmark className="size-4" />}
-                  label="Paid out today"
-                  value={<MoneyText amountMinor={BigInt(summaryQuery.data?.overview.cards.paid_out_today_minor ?? 0)} currency={currency as never} />}
-                />
-                <SummaryCard
-                  icon={<MessageSquareText className="size-4" />}
-                  label="SMS sent today"
-                  value={summaryQuery.data?.overview.cards.sms_sent_today ?? 0}
-                />
+                {session.active_products.airtime &&
+                !session.active_products.collections &&
+                !session.active_products.payouts &&
+                !session.active_products.sms ? (
+                  <>
+                    <SummaryCard
+                      icon={<Smartphone className="size-4" />}
+                      label="Airtime sent today"
+                      value={summaryQuery.data?.overview.cards.airtime_sent_today ?? 0}
+                    />
+                    <SummaryCard
+                      icon={<Activity className="size-4" />}
+                      label="Success rate"
+                      value={`${summaryQuery.data?.overview.cards.airtime_success_rate ?? 0}%`}
+                    />
+                    <SummaryCard
+                      icon={<CircleDollarSign className="size-4" />}
+                      label="Spend this month"
+                      value={<MoneyText amountMinor={BigInt(summaryQuery.data?.overview.cards.airtime_spend_this_month_minor ?? 0)} currency={currency as never} />}
+                    />
+                  </>
+                ) : (
+                  <>
+                    {session.active_products.collections ? (
+                      <SummaryCard
+                        icon={<CreditCard className="size-4" />}
+                        label="Collected today"
+                        value={<MoneyText amountMinor={BigInt(summaryQuery.data?.overview.cards.collected_today_minor ?? 0)} currency={currency as never} />}
+                      />
+                    ) : null}
+                    {session.active_products.payouts ? (
+                      <SummaryCard
+                        icon={<Landmark className="size-4" />}
+                        label="Paid out today"
+                        value={<MoneyText amountMinor={BigInt(summaryQuery.data?.overview.cards.paid_out_today_minor ?? 0)} currency={currency as never} />}
+                      />
+                    ) : null}
+                    {session.active_products.sms ? (
+                      <SummaryCard
+                        icon={<MessageSquareText className="size-4" />}
+                        label="SMS sent today"
+                        value={summaryQuery.data?.overview.cards.sms_sent_today ?? 0}
+                      />
+                    ) : null}
+                    {session.active_products.airtime ? (
+                      <SummaryCard
+                        icon={<Smartphone className="size-4" />}
+                        label="Airtime sent today"
+                        value={summaryQuery.data?.overview.cards.airtime_sent_today ?? 0}
+                      />
+                    ) : null}
+                  </>
+                )}
               </SummaryCardGrid>
               <FilterBar
                 filters={[
@@ -2343,6 +2985,374 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
             </>
           ) : null}
 
+          {currentPage === "/airtime" ? (
+            <>
+              <PageHeader
+                action={<Button onClick={() => setAirtimeOpen(true)} variant="primary">Send airtime</Button>}
+                subtitle="Top up mobile numbers from your available balance."
+                title="Airtime"
+              />
+              <SummaryCardGrid columns={4}>
+                <SummaryCard icon={<Smartphone className="size-4" />} label="Airtime sent" value={airtimeSummaryQuery.data?.sent ?? 0} />
+                <SummaryCard icon={<Send className="size-4" />} label="Successful" value={airtimeSummaryQuery.data?.successful ?? 0} />
+                <SummaryCard icon={<Activity className="size-4" />} label="Failed" value={airtimeSummaryQuery.data?.failed ?? 0} />
+                <SummaryCard icon={<CircleDollarSign className="size-4" />} label="Spend" value={<MoneyText amountMinor={BigInt(airtimeSummaryQuery.data?.spend_minor ?? 0)} currency={currency as never} />} />
+              </SummaryCardGrid>
+              <FilterBar
+                filters={[
+                  <DateRangePicker key="range" onChange={setDateRange} value={dateRange} />,
+                  <Select key="status" onValueChange={setStatusFilter} options={[{ label: "All statuses", value: "" }, { label: "Pending", value: "pending" }, { label: "Processing", value: "processing" }, { label: "Successful", value: "successful" }, { label: "Failed", value: "failed" }]} value={statusFilter} />,
+                  <Select
+                    key="network"
+                    onValueChange={setAirtimeNetworkFilter}
+                    options={[
+                      { label: "All networks", value: "" },
+                      ...Array.from(new Set((airtimeNetworksQuery.data ?? []).map((network) => network.network))).map((network) => ({
+                        label: network,
+                        value: network
+                      }))
+                    ]}
+                    value={airtimeNetworkFilter}
+                  />
+                ]}
+                onReset={() => {
+                  setDateRange(makeDateRangeValue());
+                  setStatusFilter("");
+                  setAirtimeNetworkFilter("");
+                  setSearch("");
+                }}
+                onSearchChange={setSearch}
+                placeholder="Search phone"
+                searchValue={search}
+              />
+              <div className="flex justify-end">
+                <Button
+                  onClick={() =>
+                    exportCsv(
+                      "airtime-orders.csv",
+                      ["Date", "Recipient", "Network", "Amount", "Cost", "Status", "Reference"],
+                      (airtimeOrdersQuery.data ?? []).map((row) => [
+                        row.created_at,
+                        row.phone_masked ?? maskRecipient(row.phone),
+                        row.network,
+                        formatMoney(BigInt(row.amount), row.currency as never, "en-GH"),
+                        formatMoney(BigInt(row.charge_amount), row.charge_currency as never, "en-GH"),
+                        row.status,
+                        row.reference
+                      ])
+                    )
+                  }
+                  variant="ghost"
+                >
+                  <Download className="size-4" />
+                  Export CSV
+                </Button>
+              </div>
+              <Tabs
+                items={[
+                  {
+                    label: "Orders",
+                    value: "orders",
+                    content: (
+                      <DataTable
+                        columns={([
+                          { accessorKey: "created_at", header: "Date", cell: ({ row }) => formatDateTime(row.original.created_at, timeZone) },
+                          { accessorKey: "phone", header: "Recipient", cell: ({ row }) => row.original.phone_masked ?? maskRecipient(row.original.phone) },
+                          { accessorKey: "network", header: "Network" },
+                          { accessorKey: "amount", header: "Amount", cell: ({ row }) => formatMoney(BigInt(row.original.amount), row.original.currency as never, "en-GH") },
+                          { accessorKey: "charge_amount", header: "Cost", cell: ({ row }) => formatMoney(BigInt(row.original.charge_amount), row.original.charge_currency as never, "en-GH") },
+                          { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge status={row.original.status as never} /> },
+                          { accessorKey: "reference", header: "Reference", cell: ({ row }) => row.original.reference ?? "-" }
+                        ] as ColumnDef<AirtimeOrderRow>[]) }
+                        data={airtimeOrdersQuery.data ?? []}
+                        emptyState={<EmptyState action={<Button onClick={() => setAirtimeOpen(true)} variant="primary">Send airtime</Button>} description="Send a single top-up or paste a list of numbers to get started." title="No airtime orders yet" />}
+                        loading={airtimeOrdersQuery.isLoading}
+                        onRowClick={(row) => setSelectedAirtimeId(row.id)}
+                        pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 20 }}
+                      />
+                    )
+                  },
+                  {
+                    label: "Batches",
+                    value: "batches",
+                    content: (
+                      <DataTable
+                        columns={([
+                          { accessorKey: "created_at", header: "Date", cell: ({ row }) => formatDateTime(row.original.created_at, timeZone) },
+                          { accessorKey: "reference", header: "Reference", cell: ({ row }) => row.original.reference ?? row.original.id },
+                          { accessorKey: "accepted", header: "Accepted" },
+                          { accessorKey: "successful", header: "Successful" },
+                          { accessorKey: "failed", header: "Failed" },
+                          {
+                            accessorKey: "status",
+                            header: "Progress",
+                            cell: ({ row }) => {
+                              const pending = Math.max(
+                                row.original.accepted - row.original.successful - row.original.failed,
+                                0
+                              );
+                              const percent = row.original.accepted === 0
+                                ? 0
+                                : Math.round(((row.original.successful + row.original.failed) / row.original.accepted) * 100);
+                              return (
+                                <div className="space-y-1">
+                                  <StatusBadge status={(row.original.status === "completed" ? "successful" : "processing") as never} />
+                                  <p className="text-xs text-text-secondary">
+                                    {row.original.successful} ok · {row.original.failed} failed · {pending} pending
+                                  </p>
+                                  <div className="h-1.5 overflow-hidden rounded-full bg-surface-subtle">
+                                    <div className="h-full bg-brand" style={{ width: `${percent}%` }} />
+                                  </div>
+                                </div>
+                              );
+                            }
+                          }
+                        ] as ColumnDef<AirtimeBatchRow>[]) }
+                        data={airtimeBatchesQuery.data ?? []}
+                        emptyState={<EmptyState description="Bulk sends will appear here with accepted, successful, failed and pending counts." title="No airtime batches yet" />}
+                        loading={airtimeBatchesQuery.isLoading}
+                        onRowClick={(row) => setSelectedAirtimeBatchId(row.id)}
+                        pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 20 }}
+                      />
+                    )
+                  }
+                ]}
+              />
+              <Drawer
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setSelectedAirtimeId(null);
+                  }
+                }}
+                open={Boolean(selectedAirtimeId)}
+                title="Airtime order"
+              >
+                {airtimeDetailQuery.data ? (
+                  <div className="space-y-5">
+                    <CopyField label="Order ID" value={airtimeDetailQuery.data.id} />
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.16em] text-text-muted">Recipient</p>
+                        <p className="mt-1 font-semibold text-text">{airtimeDetailQuery.data.phone_masked}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.16em] text-text-muted">Network</p>
+                        <p className="mt-1 font-semibold text-text">{airtimeDetailQuery.data.network} ({airtimeDetailQuery.data.country_code})</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.16em] text-text-muted">Face value</p>
+                        <p className="mt-1 font-semibold text-text">{formatMoney(BigInt(airtimeDetailQuery.data.amount), airtimeDetailQuery.data.currency as never, "en-GH")}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.16em] text-text-muted">Discount</p>
+                        <p className="mt-1 font-semibold text-text">{formatMoney(BigInt(airtimeDetailQuery.data.discount_minor), airtimeDetailQuery.data.currency as never, "en-GH")}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.16em] text-text-muted">Charge</p>
+                        <p className="mt-1 font-semibold text-text">{formatMoney(BigInt(airtimeDetailQuery.data.charge_amount), airtimeDetailQuery.data.charge_currency as never, "en-GH")}</p>
+                      </div>
+                      {airtimeDetailQuery.data.fx_rate ? (
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.16em] text-text-muted">FX rate</p>
+                          <p className="mt-1 font-semibold text-text">{airtimeDetailQuery.data.fx_rate}</p>
+                        </div>
+                      ) : null}
+                    </div>
+                    {airtimeDetailQuery.data.batch_id ? (
+                      <Button
+                        onClick={() => {
+                          setSelectedAirtimeId(null);
+                          setSelectedAirtimeBatchId(airtimeDetailQuery.data?.batch_id ?? null);
+                        }}
+                        variant="secondary"
+                      >
+                        Open batch {airtimeDetailQuery.data.batch_id}
+                      </Button>
+                    ) : null}
+                    <div className="space-y-3">
+                      <h4 className="font-semibold text-text">Status timeline</h4>
+                      {airtimeDetailQuery.data.event_timeline.length === 0 ? (
+                        <p className="text-sm text-text-secondary">No status events yet.</p>
+                      ) : (
+                        airtimeDetailQuery.data.event_timeline.map((event, index) => (
+                          <div className="rounded-input border border-border bg-surface-subtle px-4 py-3" key={`${event.created_at}-${index}`}>
+                            <p className="font-medium text-text">{event.from_status ?? "start"} to {event.to_status}</p>
+                            <p className="text-sm text-text-secondary">{formatDateTime(event.created_at, timeZone)}</p>
+                            {event.reason ? <p className="mt-1 text-sm text-text-secondary">{event.reason}</p> : null}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <StatusBadge status={airtimeDetailQuery.data.status as never} />
+                  </div>
+                ) : (
+                  <p className="text-sm text-text-secondary">Loading order details.</p>
+                )}
+              </Drawer>
+              <Drawer
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setSelectedAirtimeBatchId(null);
+                  }
+                }}
+                open={Boolean(selectedAirtimeBatchId)}
+                title="Airtime batch"
+              >
+                {(() => {
+                  const batch = (airtimeBatchesQuery.data ?? []).find((row) => row.id === selectedAirtimeBatchId);
+                  if (!batch) {
+                    return <p className="text-sm text-text-secondary">This batch is no longer on the current page.</p>;
+                  }
+
+                  const pending = Math.max(batch.accepted - batch.successful - batch.failed, 0);
+                  const percent = batch.accepted === 0
+                    ? 0
+                    : Math.round(((batch.successful + batch.failed) / batch.accepted) * 100);
+
+                  return (
+                    <div className="space-y-4">
+                      <CopyField label="Batch ID" value={batch.id} />
+                      <p className="text-sm text-text-secondary">
+                        {batch.accepted} accepted · {batch.successful} successful · {batch.failed} failed · {pending} pending
+                      </p>
+                      <div className="h-2 overflow-hidden rounded-full bg-surface-subtle">
+                        <div className="h-full bg-brand" style={{ width: `${percent}%` }} />
+                      </div>
+                      <p className="text-sm text-text">
+                        Total cost {formatMoney(BigInt(batch.total_charge), batch.charge_currency as never, "en-GH")}
+                      </p>
+                    </div>
+                  );
+                })()}
+              </Drawer>
+              <Drawer onOpenChange={setAirtimeOpen} open={airtimeOpen} title="Send airtime">
+                <div className="space-y-4">
+                  <div className="flex gap-2">
+                    <Button onClick={() => setAirtimeMode("single")} variant={airtimeMode === "single" ? "primary" : "secondary"}>Single</Button>
+                    <Button onClick={() => setAirtimeMode("bulk")} variant={airtimeMode === "bulk" ? "primary" : "secondary"}>Bulk</Button>
+                  </div>
+                  {airtimeMode === "single" ? (
+                    <div className="space-y-4">
+                      <Input label="Phone number" onChange={(event) => setAirtimePhone(event.target.value)} placeholder="+260970000001" value={airtimePhone} />
+                      {airtimeQuoteNetwork ? (
+                        <p className="text-sm text-text-secondary">Network: {airtimeQuoteNetwork.network} · {airtimeQuoteNetwork.country_code}</p>
+                      ) : null}
+                      {airtimeFixedDenoms.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {airtimeFixedDenoms.map((amount) => (
+                            <Button
+                              key={amount}
+                              onClick={() => setAirtimeAmount(fromMinor(BigInt(amount), (airtimeQuoteNetwork?.currency ?? currency) as CurrencyCode))}
+                              variant={airtimeAmountMinor === amount ? "primary" : "secondary"}
+                            >
+                              {formatMoney(BigInt(amount), (airtimeQuoteNetwork?.currency ?? currency) as never, "en-GH")}
+                            </Button>
+                          ))}
+                        </div>
+                      ) : (
+                        <Input label="Amount" onChange={(event) => setAirtimeAmount(event.target.value)} placeholder="10.00" value={airtimeAmount} />
+                      )}
+                      {airtimeQuoteNetwork && airtimeQuoteNetwork.amount > 0 ? (
+                        <div className="rounded-card border border-border bg-surface-subtle px-4 py-3 text-sm text-text">
+                          Recipient gets {formatMoney(BigInt(airtimeQuoteNetwork.amount), airtimeQuoteNetwork.currency as never, "en-GH")}, you pay {formatMoney(BigInt(airtimeQuoteNetwork.charge_amount), airtimeQuoteNetwork.charge_currency as never, "en-GH")}
+                        </div>
+                      ) : airtimeQuoteQuery.isError ? (
+                        <p className="text-sm text-danger">{airtimeQuoteQuery.error instanceof ApiError ? airtimeQuoteQuery.error.message : "Unable to quote this number."}</p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <Textarea
+                        label="Paste numbers"
+                        onChange={(event) => {
+                          setAirtimePhonesText(event.target.value);
+                          setAirtimeCsv("");
+                        }}
+                        placeholder="+260970000001, +260960000001"
+                        value={airtimePhonesText}
+                      />
+                      <Input label="Amount for pasted numbers" onChange={(event) => setAirtimeAmount(event.target.value)} placeholder="10.00" value={airtimeAmount} />
+                      <Select
+                        label="Contact group"
+                        onValueChange={setAirtimeGroupId}
+                        options={[
+                          { label: "No group", value: "" },
+                          ...(airtimeGroupsQuery.data ?? []).map((group) => ({
+                            label: `${group.name} (${group.contact_count})`,
+                            value: group.id
+                          }))
+                        ]}
+                        value={airtimeGroupId}
+                      />
+                      <div className="rounded-input border border-dashed border-border bg-surface-subtle p-4">
+                        <Input
+                          label="Upload CSV"
+                          onChange={async (event) => {
+                            const file = event.target.files?.[0];
+                            if (!file) {
+                              return;
+                            }
+                            setAirtimeCsv(await file.text());
+                            setAirtimePhonesText("");
+                          }}
+                          type="file"
+                        />
+                        <Button
+                          className="mt-3"
+                          onClick={() =>
+                            exportCsv("airtime-recipients.csv", ["phone", "amount"], [["+260970000001", 1000]])
+                          }
+                          variant="ghost"
+                        >
+                          Download CSV template
+                        </Button>
+                      </div>
+                      <DataTable
+                        columns={([
+                          { accessorKey: "phone", header: "Recipient" },
+                          { accessorKey: "amount", header: "Amount", cell: ({ row }) => Number.isSafeInteger(row.original.amount) ? formatMoney(BigInt(row.original.amount), (airtimeQuoteNetwork?.currency ?? currency) as never, "en-GH") : "-" },
+                          { accessorKey: "error", header: "Error", cell: ({ row }) => row.original.error ?? "" }
+                        ] as ColumnDef<(typeof airtimePreviewRows)[number]>[]) }
+                        data={airtimePreviewRows}
+                        emptyState={<EmptyState description="Paste numbers, upload a CSV, or pick a contact group to preview recipients." title="No recipients yet" />}
+                        pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 20 }}
+                      />
+                    </div>
+                  )}
+                  <Input label="Reference (optional)" onChange={(event) => setAirtimeReference(event.target.value)} value={airtimeReference} />
+                  {airtimeBalanceTooLow ? (
+                    <div className="space-y-3 rounded-card border border-danger/30 bg-danger/10 p-4">
+                      <p className="text-sm text-danger">
+                        Available balance {formatMoney(BigInt(airtimeBalance), currency as never, "en-GH")} is too low for this send of {formatMoney(BigInt(airtimeCostTotal), (airtimeQuoteNetwork?.charge_currency ?? currency) as never, "en-GH")}.
+                      </p>
+                      <Button
+                        onClick={() => {
+                          setAirtimeOpen(false);
+                          setTopupOpen(true);
+                        }}
+                        variant="primary"
+                      >
+                        Top up
+                      </Button>
+                    </div>
+                  ) : (
+                    <ConfirmDialog
+                      confirmLabel="Send airtime"
+                      description={`Recipients: ${airtimeMode === "single" ? 1 : validAirtimeRows.length}. Total airtime: ${formatMoney(BigInt(Math.max(airtimeFaceTotal, 0)), (airtimeQuoteNetwork?.currency ?? currency) as never, "en-GH")}. Total cost: ${formatMoney(BigInt(Math.max(airtimeCostTotal, 0)), (airtimeQuoteNetwork?.charge_currency ?? currency) as never, "en-GH")}. Balance after: ${formatMoney(BigInt(Math.max(airtimeBalanceAfter, 0)), currency as never, "en-GH")}.`}
+                      onConfirm={handleAirtimeSend}
+                      onOpenChange={setAirtimeConfirmOpen}
+                      open={airtimeConfirmOpen}
+                      title="Confirm airtime"
+                      trigger={<Button variant="primary">Review and send</Button>}
+                    >
+                      <p className="text-sm text-text-secondary">Check the recipient count, face value, cost, and remaining balance before the top-up is queued.</p>
+                    </ConfirmDialog>
+                  )}
+                </div>
+              </Drawer>
+            </>
+          ) : null}
+
           {currentPage === "/contacts" ? (
             <>
               <PageHeader
@@ -2599,7 +3609,7 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
                       Copy cURL
                     </Button>
                     <a href={publicDocsUrl} rel="noreferrer" target="_blank">
-                      <Button variant="primary">Open API docs</Button>
+                      <Button variant="primary">Open API docs (PDF)</Button>
                     </a>
                   </div>
                 </div>
@@ -2616,7 +3626,8 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
                       <p className="font-semibold">Use test mode first</p>
                       <p className="mt-1">
                         Simulator numbers ending in <code>0001</code> succeed, <code>0002</code> fail,
-                        and <code>0003</code> stay pending until a later status check.
+                        and <code>0003</code> stay pending until a later status check. Airtime uses the
+                        same last-four shortcuts on the recipient number.
                       </p>
                     </div>
                   </div>
@@ -2657,6 +3668,11 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
                           searchValue={developerSearch}
                         />
                         <div className="flex flex-wrap justify-end gap-3">
+                          <a href={`${env.apiBaseUrl}/v1/openapi.pdf`} rel="noreferrer" target="_blank">
+                            <Button leadingIcon={<BookText className="size-4" />} variant="secondary">
+                              API PDF
+                            </Button>
+                          </a>
                           <Button
                             leadingIcon={<Download className="size-4" />}
                             onClick={() =>
@@ -3088,7 +4104,7 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
                     </div>
                   </div>
                   <div className="flex justify-end gap-3">
-                    <Button onClick={() => void handleCreateApiKey()} variant="primary">
+                    <Button loading={creatingApiKey} onClick={() => void handleCreateApiKey()} variant="primary">
                       Create key
                     </Button>
                   </div>
@@ -3211,7 +4227,13 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
                     label: "Team",
                     value: "team",
                     content: (
-                      <DataTable
+                      <div className="space-y-4">
+                        <div className="flex justify-end">
+                          <Button onClick={() => setInviteOpen(true)} variant="primary">
+                            Invite teammate
+                          </Button>
+                        </div>
+                        <DataTable
                         columns={([
                           { accessorKey: "full_name", header: "Name", cell: ({ row }) => row.original.full_name ?? "-" },
                           { accessorKey: "email", header: "Email", cell: ({ row }) => row.original.email ?? "-" },
@@ -3222,6 +4244,60 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
                         loading={teamQuery.isLoading}
                         pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 20 }}
                       />
+                        <Modal onOpenChange={setInviteOpen} open={inviteOpen} title="Invite teammate">
+                          <div className="space-y-4">
+                            <Input label="Email" onChange={(event) => setInviteEmail(event.target.value)} type="email" value={inviteEmail} />
+                            <Select
+                              label="Role"
+                              onValueChange={setInviteRole}
+                              options={[
+                                { label: "Admin", value: "admin" },
+                                { label: "Developer", value: "developer" },
+                                { label: "Finance", value: "finance" },
+                                { label: "Support", value: "support" },
+                                { label: "Viewer", value: "viewer" }
+                              ]}
+                              value={inviteRole}
+                            />
+                            <Button
+                              loading={inviting}
+                              onClick={() => {
+                                if (!auth.accessToken || !merchantId || inviting) {
+                                  return;
+                                }
+                                setInviting(true);
+                                void apiRequest("/dashboard/v1/team/invite", {
+                                  accessToken: auth.accessToken,
+                                  body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+                                  merchantId,
+                                  method: "POST"
+                                })
+                                  .then(() => {
+                                    setInviteOpen(false);
+                                    setInviteEmail("");
+                                    pushToast({
+                                      description: "The teammate can accept the invite after signing in.",
+                                      title: "Invite created",
+                                      variant: "success"
+                                    });
+                                    return queryClient.invalidateQueries({ queryKey: ["dashboard-team"] });
+                                  })
+                                  .catch((error: unknown) => {
+                                    pushToast({
+                                      description: error instanceof ApiError ? error.message : "Unable to invite this teammate.",
+                                      title: "Invite failed",
+                                      variant: "danger"
+                                    });
+                                  })
+                                  .finally(() => setInviting(false));
+                              }}
+                              variant="primary"
+                            >
+                              Send invite
+                            </Button>
+                          </div>
+                        </Modal>
+                      </div>
                     )
                   },
                   {
@@ -3251,6 +4327,51 @@ export function MerchantWorkspace({ auth }: { auth: WorkspaceAuth }) {
                         loading={settlementAccountsQuery.isLoading}
                         pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 20 }}
                       />
+                    )
+                  },
+                  {
+                    label: "Products",
+                    value: "products",
+                    content: (
+                      <section className="space-y-4">
+                        <p className="text-sm text-text-secondary">
+                          Requesting a product follows the same review flow as sign-up. Active products stay available immediately.
+                        </p>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          {([
+                            { description: "Accept mobile money and card payments.", key: "collections" as const, title: "Collections" },
+                            { description: "Send money to customers.", key: "payouts" as const, title: "Payouts" },
+                            { description: "Broadcast from the dashboard or trigger SMS from your app.", key: "sms" as const, title: "SMS" },
+                            { description: "Top up mobile numbers from your available balance.", key: "airtime" as const, title: "Send airtime" }
+                          ]).map((product) => {
+                            const row = (productsCatalogQuery.data ?? []).find((item) => item.key === product.key);
+                            const active = row?.active ?? false;
+                            const requested = row?.requested ?? false;
+
+                            return (
+                              <article className="rounded-card border border-border bg-surface p-5 shadow-softer" key={product.key}>
+                                <h3 className="text-lg font-semibold text-text">{product.title}</h3>
+                                <p className="mt-1 text-sm text-text-secondary">{product.description}</p>
+                                <div className="mt-4">
+                                  {active ? (
+                                    <StatusBadge status="approved" />
+                                  ) : requested ? (
+                                    <StatusBadge status="pending" />
+                                  ) : (
+                                    <Button
+                                      loading={requestingProduct === product.key}
+                                      onClick={() => void handleProductRequest(product.key)}
+                                      variant="secondary"
+                                    >
+                                      Request
+                                    </Button>
+                                  )}
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </section>
                     )
                   },
                   {

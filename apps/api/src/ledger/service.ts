@@ -56,6 +56,18 @@ interface ReleasePayoutHoldParams extends MerchantMoneyParams {
   payoutId: string;
 }
 
+interface AirtimeHoldParams extends MerchantMoneyParams {
+  /** An airtime order id, or a batch id when a bulk submission is held as one amount. */
+  airtimeReference: string;
+  description?: string;
+}
+
+interface CompleteAirtimeParams extends AirtimeHoldParams {
+  channelId: string;
+  providerCostAmount: bigint;
+  providerCostCurrency: CurrencyCode;
+}
+
 interface ChargeFeeParams extends MerchantMoneyParams {
   description?: string;
   feeId: string;
@@ -100,7 +112,8 @@ function assertAccountShape(account: ManualAdjustmentAccount) {
     "merchant_available",
     "merchant_pending",
     "merchant_reserve",
-    "merchant_payout_hold"
+    "merchant_payout_hold",
+    "merchant_airtime_hold"
   ]);
 
   if (merchantScopedTypes.has(account.type) && account.merchantId === null) {
@@ -345,6 +358,120 @@ export class LedgerService {
       ],
       referenceId: params.payoutId,
       referenceType: "payout"
+    });
+  }
+
+  async holdForAirtime(params: AirtimeHoldParams): Promise<LedgerJournalEntry> {
+    return this.createJournal({
+      currency: params.currency,
+      description: params.description ?? `Hold airtime ${params.airtimeReference}`,
+      mode: params.mode,
+      postings: [
+        {
+          account: { merchantId: params.merchantId, type: "merchant_available" },
+          amount: params.amount,
+          direction: "debit"
+        },
+        {
+          account: { merchantId: params.merchantId, type: "merchant_airtime_hold" },
+          amount: params.amount,
+          direction: "credit"
+        }
+      ],
+      referenceId: params.airtimeReference,
+      referenceType: "airtime"
+    });
+  }
+
+  async completeAirtime(params: CompleteAirtimeParams): Promise<LedgerJournalEntry[]> {
+    const description = params.description ?? `Complete airtime ${params.airtimeReference}`;
+
+    if (params.providerCostCurrency === params.currency) {
+      return [
+        await this.createJournal({
+          currency: params.currency,
+          description,
+          mode: params.mode,
+          postings: [
+            {
+              account: { merchantId: params.merchantId, type: "merchant_airtime_hold" },
+              amount: params.amount,
+              direction: "debit"
+            },
+            {
+              account: { channelId: params.channelId, merchantId: null, type: "provider_clearing" },
+              amount: params.amount,
+              direction: "credit"
+            }
+          ],
+          referenceId: params.airtimeReference,
+          referenceType: "airtime"
+        })
+      ];
+    }
+
+    const merchantLeg = await this.createJournal({
+      currency: params.currency,
+      description: `${description} (merchant leg)`,
+      mode: params.mode,
+      postings: [
+        {
+          account: { merchantId: params.merchantId, type: "merchant_airtime_hold" },
+          amount: params.amount,
+          direction: "debit"
+        },
+        {
+          account: { merchantId: null, type: "fx_clearing" },
+          amount: params.amount,
+          direction: "credit"
+        }
+      ],
+      referenceId: params.airtimeReference,
+      referenceType: "airtime"
+    });
+
+    const providerLeg = await this.createJournal({
+      currency: params.providerCostCurrency,
+      description: `${description} (provider leg)`,
+      mode: params.mode,
+      postings: [
+        {
+          account: { merchantId: null, type: "fx_clearing" },
+          amount: params.providerCostAmount,
+          direction: "debit"
+        },
+        {
+          account: { channelId: params.channelId, merchantId: null, type: "provider_clearing" },
+          amount: params.providerCostAmount,
+          direction: "credit"
+        }
+      ],
+      referenceId: params.airtimeReference,
+      referenceType: "airtime"
+    });
+
+    return [merchantLeg, providerLeg];
+  }
+
+  async releaseAirtimeHold(params: AirtimeHoldParams): Promise<LedgerJournalEntry> {
+    return this.createJournal({
+      currency: params.currency,
+      description: params.description ?? `Release airtime hold ${params.airtimeReference}`,
+      mode: params.mode,
+      postings: [
+        {
+          account: { merchantId: params.merchantId, type: "merchant_airtime_hold" },
+          amount: params.amount,
+          direction: "debit"
+        },
+        {
+          account: { merchantId: params.merchantId, type: "merchant_available" },
+          amount: params.amount,
+          direction: "credit"
+        }
+      ],
+      referenceId: params.airtimeReference,
+      referenceType: "airtime"
     });
   }
 
@@ -637,7 +764,9 @@ export class LedgerService {
 }
 
 export type {
+  AirtimeHoldParams,
   ChargeFeeParams,
+  CompleteAirtimeParams,
   ChargeSmsParams,
   CollectionCreditParams,
   CompletePayoutParams,

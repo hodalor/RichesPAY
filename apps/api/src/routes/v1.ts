@@ -1,7 +1,9 @@
 import { sql } from "kysely";
 import { z } from "zod";
 
+import { registerAirtimeRoutes } from "../airtime";
 import { registerCollectionRoutes } from "../collections";
+import { renderApiPdf } from "../docs/api-pdf";
 import { registerCheckoutRoutes } from "../checkout";
 import { registerPayoutRoutes } from "../payouts";
 import { registerSmsPublicRoutes } from "../sms";
@@ -28,11 +30,26 @@ export async function registerV1Routes(app: FastifyTypedInstance) {
     async () => app.swagger()
   );
 
+  app.get(
+    "/openapi.pdf",
+    {
+      schema: {
+        hide: true
+      }
+    },
+    async (_request, reply) =>
+      reply
+        .header("content-disposition", "inline; filename=\"richespay-api.pdf\"")
+        .type("application/pdf")
+        .send(renderApiPdf())
+  );
+
   await app.register(async (protectedApp) => {
     await protectedApp.register(publicApiPlugin);
     await registerCollectionRoutes(protectedApp);
     await registerPayoutRoutes(protectedApp);
     await registerSmsPublicRoutes(protectedApp);
+    await registerAirtimeRoutes(protectedApp);
 
     protectedApp.get(
       "/fees/quote",
@@ -136,12 +153,13 @@ export async function registerV1Routes(app: FastifyTypedInstance) {
               "la.currency as currency",
               sql<string>`coalesce(sum(case when la.type = 'merchant_available' then ab.balance else 0 end), 0)::text`.as("available"),
               sql<string>`coalesce(sum(case when la.type = 'merchant_pending' then ab.balance else 0 end), 0)::text`.as("pending"),
-              sql<string>`coalesce(sum(case when la.type = 'merchant_payout_hold' then ab.balance else 0 end), 0)::text`.as("onHold")
+              sql<string>`coalesce(sum(case when la.type in ('merchant_payout_hold', 'merchant_airtime_hold') then ab.balance else 0 end), 0)::text`.as("onHold")
             ])
             .where("la.type", "in", [
               "merchant_available",
               "merchant_pending",
-              "merchant_payout_hold"
+              "merchant_payout_hold",
+              "merchant_airtime_hold"
             ])
             .groupBy("la.currency")
             .orderBy("la.currency")

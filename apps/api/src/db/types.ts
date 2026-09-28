@@ -9,7 +9,13 @@ export type ActorType = "admin" | "api_key" | "system" | "user";
 
 export type ApiKeyKind = "public" | "secret";
 
-export type ApiKeyScope = "collections" | "payouts" | "read" | "sms";
+export type AirtimeBatchStatus = "completed" | "processing";
+
+export type AirtimeFloatStatus = "empty" | "low" | "ok" | "unknown";
+
+export type AirtimeOrderStatus = "failed" | "pending" | "processing" | "successful";
+
+export type ApiKeyScope = "airtime" | "collections" | "payouts" | "read" | "sms";
 
 export type ArrayType<T> = ArrayTypeImpl<T> extends (infer U)[]
   ? U[]
@@ -19,11 +25,11 @@ export type ArrayTypeImpl<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S[], I[], U[]>
   : T[];
 
-export type ChannelCapability = "collect" | "payout" | "sms";
+export type ChannelCapability = "airtime" | "collect" | "payout" | "sms";
 
 export type ChannelHealth = "degraded" | "down" | "healthy";
 
-export type ChannelKind = "bank" | "card" | "mobile_money" | "sms";
+export type ChannelKind = "airtime" | "bank" | "card" | "mobile_money" | "sms";
 
 export type ChannelStatus = "active" | "disabled" | "maintenance";
 
@@ -59,7 +65,7 @@ export type IdempotencyStatus = "completed" | "in_progress";
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
-export type JournalReferenceType = "adjustment" | "collection" | "fee" | "payout" | "reversal" | "settlement" | "sms" | "topup";
+export type JournalReferenceType = "adjustment" | "airtime" | "collection" | "fee" | "payout" | "reversal" | "settlement" | "sms" | "topup";
 
 export type Json = JsonValue;
 
@@ -81,7 +87,7 @@ export type KybProfileStatus = "approved" | "pending" | "rejected";
 
 export type KybTier = "tier_0" | "tier_1" | "tier_2" | "tier_3";
 
-export type LedgerAccountType = "fx_clearing" | "merchant_available" | "merchant_payout_hold" | "merchant_pending" | "merchant_reserve" | "platform_fees" | "platform_sms_revenue" | "provider_clearing" | "suspense";
+export type LedgerAccountType = "fx_clearing" | "merchant_airtime_hold" | "merchant_available" | "merchant_payout_hold" | "merchant_pending" | "merchant_reserve" | "platform_fees" | "platform_sms_revenue" | "provider_clearing" | "suspense";
 
 export type MembershipRole = "admin" | "developer" | "finance" | "owner" | "support" | "viewer";
 
@@ -132,6 +138,101 @@ export type SmsOtpStatus = "expired" | "failed" | "pending" | "verified";
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export type TopupStatus = "expired" | "failed" | "pending" | "successful";
+
+export interface AirtimeBatches {
+  accepted: Generated<number>;
+  charge_currency: string;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  failed: Generated<number>;
+  id: string;
+  merchant_id: string;
+  mode: RpMode;
+  reference: string | null;
+  rejected: Generated<number>;
+  rejected_rows: Generated<Json>;
+  status: Generated<AirtimeBatchStatus>;
+  successful: Generated<number>;
+  total_charge: Generated<Int8>;
+  total_items: Generated<number>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface AirtimeChannelFloatHistory {
+  balance_minor: Int8 | null;
+  channel_id: string;
+  checked_at: Generated<Timestamp>;
+  created_at: Generated<Timestamp>;
+  currency: string | null;
+  id: string;
+  status: AirtimeFloatStatus;
+  threshold_minor: Int8;
+}
+
+export interface AirtimeChannelFloats {
+  balance_minor: Int8 | null;
+  channel_id: string;
+  checked_at: Generated<Timestamp>;
+  created_at: Generated<Timestamp>;
+  currency: string | null;
+  status: Generated<AirtimeFloatStatus>;
+  threshold_minor: Int8;
+}
+
+export interface AirtimeDiscountPlans {
+  active: Generated<boolean>;
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  discount_bps: number;
+  id: string;
+  merchant_id: string | null;
+  mode: RpMode | null;
+  network: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface AirtimeNetworks {
+  active: Generated<boolean>;
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  currency: string;
+  fixed_denominations: number[] | null;
+  max_minor: Int8;
+  min_minor: Int8;
+  network: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface AirtimeOrders {
+  amount: Int8;
+  batch_id: string | null;
+  channel_id: string | null;
+  charge_amount: Int8;
+  charge_currency: string;
+  completed_at: Timestamp | null;
+  country_code: string;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  currency: string;
+  discount_minor: Generated<Int8>;
+  failure_code: string | null;
+  fx_rate_id: string | null;
+  id: string;
+  last_status_check_at: Timestamp | null;
+  merchant_id: string;
+  metadata: Generated<Json>;
+  mode: RpMode;
+  network: string;
+  next_status_check_at: Timestamp | null;
+  phone: string;
+  provider_ref: string | null;
+  reference: string | null;
+  send_attempts: Generated<number>;
+  status: Generated<AirtimeOrderStatus>;
+  status_check_attempts: Generated<number>;
+  updated_at: Generated<Timestamp>;
+}
 
 export interface AccountBalances {
   account_id: string;
@@ -487,6 +588,9 @@ export interface MerchantBalanceAlertThresholds {
 }
 
 export interface MerchantComplianceProfiles {
+  airtime_merchant_daily_cap_minor: Int8 | null;
+  airtime_number_daily_cap_minor: Int8 | null;
+  airtime_velocity_per_number: Generated<number>;
   collections_daily_volume_minor: Int8 | null;
   collections_freeze_category: ComplianceReasonCategory | null;
   collections_max_minor: Generated<Int8>;
@@ -577,12 +681,19 @@ export interface MerchantNotifications {
 }
 
 export interface MerchantProducts {
+  airtime_enabled: Generated<boolean>;
+  airtime_requested: Generated<boolean>;
   collections_enabled: Generated<boolean>;
+  collections_requested: Generated<boolean>;
   created_at: Generated<Timestamp>;
   merchant_id: string;
   mode: RpMode;
   payouts_enabled: Generated<boolean>;
+  payouts_requested: Generated<boolean>;
+  sms_api_enabled: Generated<boolean>;
+  sms_broadcast_enabled: Generated<boolean>;
   sms_enabled: Generated<boolean>;
+  sms_requested: Generated<boolean>;
   updated_at: Generated<Timestamp>;
 }
 
@@ -1070,6 +1181,12 @@ export interface Withdrawals {
 
 export interface DB {
   account_balances: AccountBalances;
+  airtime_batches: AirtimeBatches;
+  airtime_channel_float_history: AirtimeChannelFloatHistory;
+  airtime_channel_floats: AirtimeChannelFloats;
+  airtime_discount_plans: AirtimeDiscountPlans;
+  airtime_networks: AirtimeNetworks;
+  airtime_orders: AirtimeOrders;
   api_keys: ApiKeys;
   api_request_logs: ApiRequestLogs;
   audit_logs: AuditLogs;

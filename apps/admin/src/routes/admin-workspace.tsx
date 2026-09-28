@@ -20,6 +20,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   AppShell,
   Button,
+  Checkbox,
   ConfirmDialog,
   CopyField,
   DataTable,
@@ -54,6 +55,7 @@ type LedgerAccountType =
   | "merchant_pending"
   | "merchant_reserve"
   | "merchant_payout_hold"
+  | "merchant_airtime_hold"
   | "platform_fees"
   | "platform_sms_revenue"
   | "provider_clearing"
@@ -71,6 +73,7 @@ const ledgerAccountTypeOptions: Array<{ label: string; value: LedgerAccountType 
   { label: "Merchant pending", value: "merchant_pending" },
   { label: "Merchant reserve", value: "merchant_reserve" },
   { label: "Merchant payout hold", value: "merchant_payout_hold" },
+  { label: "Merchant airtime hold", value: "merchant_airtime_hold" },
   { label: "Platform fees", value: "platform_fees" },
   { label: "Platform SMS revenue", value: "platform_sms_revenue" },
   { label: "Provider clearing", value: "provider_clearing" },
@@ -86,15 +89,26 @@ interface AdminSessionData {
 
 interface OverviewData {
   active_merchants: number;
+  airtime_volume_today_minor: number;
   channel_health: Array<{
     channel_id: string;
     country_code: string;
     health: "healthy" | "degraded" | "down";
-    kind: "mobile_money" | "card" | "sms" | "bank";
+    kind: "mobile_money" | "card" | "sms" | "bank" | "airtime";
     mode: Mode;
     network: string | null;
     provider_code: string;
     status: "active" | "disabled" | "maintenance";
+  }>;
+  low_float_channels: Array<{
+    balance_minor: number | null;
+    channel_id: string;
+    country_code: string;
+    currency: string | null;
+    network: string | null;
+    provider_code: string;
+    status: "ok" | "low" | "empty" | "unknown";
+    threshold_minor: number | null;
   }>;
   open_exceptions: number;
   platform_volume_today_minor: number;
@@ -138,9 +152,16 @@ interface MerchantDetailData {
   mode: Mode;
   payouts_frozen: boolean;
   products: {
+    airtime_enabled: boolean;
+    airtime_requested: boolean;
     collections_enabled: boolean;
+    collections_requested: boolean;
     payouts_enabled: boolean;
+    payouts_requested: boolean;
+    sms_api_enabled: boolean;
+    sms_broadcast_enabled: boolean;
     sms_enabled: boolean;
+    sms_requested: boolean;
   };
   settlement_currency: string;
   status: "active" | "closed" | "pending_kyb" | "suspended";
@@ -308,7 +329,7 @@ interface ChannelRow {
   has_credentials: boolean;
   health: "healthy" | "degraded" | "down";
   id: string;
-  kind: "mobile_money" | "card" | "sms" | "bank";
+  kind: "mobile_money" | "card" | "sms" | "bank" | "airtime";
   mode: Mode;
   network: string | null;
   priority: number;
@@ -317,12 +338,93 @@ interface ChannelRow {
   updated_at: string;
 }
 
+interface AirtimeNetworkAdminRow {
+  active: boolean;
+  country_code: string;
+  currency: string;
+  fixed_denominations: number[] | null;
+  max_amount: number;
+  min_amount: number;
+  network: string;
+  updated_at: string;
+}
+
+interface AirtimeDiscountPlanRow {
+  active: boolean;
+  country_code: string;
+  discount_bps: number;
+  id: string;
+  merchant_id: string | null;
+  mode: Mode | null;
+  network: string;
+  updated_at: string;
+}
+
+interface AirtimeFloatRow {
+  balance_minor: number | null;
+  channel_id: string;
+  checked_at: string | null;
+  country_code: string;
+  currency: string | null;
+  network: string | null;
+  provider_code: string;
+  status: "ok" | "low" | "empty" | "unknown";
+  threshold_minor: number | null;
+}
+
+interface AirtimeFloatHistoryRow {
+  balance_minor: number | null;
+  channel_id: string;
+  checked_at: string;
+  currency: string | null;
+  id: string;
+  status: "ok" | "low" | "empty" | "unknown";
+  threshold_minor: number;
+}
+
+interface AirtimeOrderAdminRow {
+  amount: number;
+  charge_amount: number;
+  charge_currency: string;
+  country_code: string;
+  created_at: string;
+  currency: string;
+  id: string;
+  merchant_id: string;
+  mode: Mode;
+  network: string;
+  phone: string;
+  provider_ref: string | null;
+  reference: string | null;
+  status: string;
+}
+
+interface AirtimeMerchantTabData {
+  orders: AirtimeOrderAdminRow[];
+  spend: {
+    month_charge_minor: number;
+    month_count: number;
+    today_charge_minor: number;
+    today_count: number;
+    today_successful_count: number;
+  };
+}
+
+interface AirtimeLimitsRow {
+  merchant_daily_cap_minor: number;
+  merchant_id: string;
+  mode: Mode;
+  number_daily_cap_minor: number;
+  uses_defaults: boolean;
+  velocity_per_number: number;
+}
+
 interface RoutingRuleRow {
-  capability: "collect" | "payout" | "sms";
+  capability: "collect" | "payout" | "sms" | "airtime";
   channel_ids: string[];
   country_code: string;
   id: string;
-  kind: "mobile_money" | "card" | "sms" | "bank";
+  kind: "mobile_money" | "card" | "sms" | "bank" | "airtime";
   network: string | null;
 }
 
@@ -334,7 +436,7 @@ interface TransactionSearchRow {
   mode: Mode;
   provider_ref: string | null;
   reference: string | null;
-  resource_type: "collection" | "payout" | "sms";
+  resource_type: "collection" | "payout" | "sms" | "airtime";
   status: string;
 }
 
@@ -457,8 +559,34 @@ interface AdminWorkspaceProps {
   onSignOutEverywhere: () => Promise<void>;
 }
 
+function parseDenominations(value: string): number[] | null {
+  const amounts = value
+    .split(",")
+    .map((part) => Number(part.trim()))
+    .filter((amount) => Number.isInteger(amount) && amount > 0);
+  return amounts.length > 0 ? amounts : null;
+}
+
+function airtimeFloatBadge(status: AirtimeFloatRow["status"]) {
+  if (status === "ok") return "successful" as const;
+  if (status === "empty") return "failed" as const;
+  return "pending" as const;
+}
+
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString();
+}
+
+function formatAdminMoney(amountMinor: number | bigint | null | undefined, currency: string | undefined) {
+  if (amountMinor === null || amountMinor === undefined) {
+    return "-";
+  }
+
+  if (currency !== "GHS" && currency !== "USD" && currency !== "ZMW") {
+    return "-";
+  }
+
+  return formatMoney(BigInt(amountMinor), currency, "en-GH");
 }
 
 function makeDateRangeValue(): DateRangeValue {
@@ -574,6 +702,7 @@ export function AdminWorkspace({
   const [kybReviewTarget, setKybReviewTarget] = React.useState<KybQueueRow | null>(null);
   const [kybReviewStatus, setKybReviewStatus] = React.useState<"approved" | "pending" | "rejected">("approved");
   const [kybReviewNote, setKybReviewNote] = React.useState("");
+  const [adminUserOpen, setAdminUserOpen] = React.useState(false);
   const [fxModalOpen, setFxModalOpen] = React.useState(false);
   const [fxBase, setFxBase] = React.useState("GHS");
   const [fxQuote, setFxQuote] = React.useState("USD");
@@ -600,6 +729,32 @@ export function AdminWorkspace({
   const [senderIdCountryFilter, setSenderIdCountryFilter] = React.useState("");
   const [senderIdNetworkFilter, setSenderIdNetworkFilter] = React.useState("");
   const [settingsMode, setSettingsMode] = React.useState<Mode>("live");
+  const [airtimeNetworkDraft, setAirtimeNetworkDraft] = React.useState<AirtimeNetworkAdminRow | null>(null);
+  const [airtimeNetworkMin, setAirtimeNetworkMin] = React.useState("");
+  const [airtimeNetworkMax, setAirtimeNetworkMax] = React.useState("");
+  const [airtimeNetworkActive, setAirtimeNetworkActive] = React.useState(true);
+  const [airtimeNetworkReason, setAirtimeNetworkReason] = React.useState("");
+  const [airtimeNetworkDenoms, setAirtimeNetworkDenoms] = React.useState("");
+  const [airtimeDiscountCountry, setAirtimeDiscountCountry] = React.useState("ZM");
+  const [airtimeDiscountNetwork, setAirtimeDiscountNetwork] = React.useState("MTN");
+  const [airtimeDiscountBps, setAirtimeDiscountBps] = React.useState("300");
+  const [airtimeDiscountReason, setAirtimeDiscountReason] = React.useState("");
+  const [airtimeOverrideMerchantId, setAirtimeOverrideMerchantId] = React.useState("");
+  const [airtimeOverrideMode, setAirtimeOverrideMode] = React.useState<Mode>("live");
+  const [airtimeOverrideCountry, setAirtimeOverrideCountry] = React.useState("ZM");
+  const [airtimeOverrideNetwork, setAirtimeOverrideNetwork] = React.useState("MTN");
+  const [airtimeOverrideBps, setAirtimeOverrideBps] = React.useState("300");
+  const [airtimeOverrideReason, setAirtimeOverrideReason] = React.useState("");
+  const [airtimeSaving, setAirtimeSaving] = React.useState(false);
+  const [airtimeOrderSearch, setAirtimeOrderSearch] = React.useState("");
+  const [airtimeOrderMode, setAirtimeOrderMode] = React.useState("");
+  const [selectedAirtimeFloat, setSelectedAirtimeFloat] = React.useState<AirtimeFloatRow | null>(null);
+  const [airtimeFloatThreshold, setAirtimeFloatThreshold] = React.useState("");
+  const [airtimeFloatReason, setAirtimeFloatReason] = React.useState("");
+  const [selectedAirtimeOrder, setSelectedAirtimeOrder] = React.useState<AirtimeOrderAdminRow | null>(null);
+  const [channelKindFilter, setChannelKindFilter] = React.useState("");
+  const [flagRuleFilter, setFlagRuleFilter] = React.useState("");
+  const [flagSearch, setFlagSearch] = React.useState("");
   const [defaultOtpSenderId, setDefaultOtpSenderId] = React.useState("");
   const [senderQueueActionType, setSenderQueueActionType] = React.useState<"submit" | "approve" | "reject" | null>(null);
   const [senderQueueReason, setSenderQueueReason] = React.useState("");
@@ -617,6 +772,7 @@ export function AdminWorkspace({
     if (location.pathname.includes("/transactions")) return "transactions";
     if (location.pathname.includes("/reconciliation")) return "reconciliation";
     if (location.pathname.includes("/sender-ids")) return "sender-ids";
+    if (location.pathname.includes("/airtime")) return "airtime";
     if (location.pathname.includes("/pricing")) return "pricing";
     if (location.pathname.includes("/admin-users")) return "admin-users";
     if (location.pathname.includes("/audit")) return "audit";
@@ -708,6 +864,24 @@ export function AdminWorkspace({
     queryKey: ["admin-merchant-sms", accessToken, selectedMerchantId, merchantMode],
     queryFn: () =>
       apiRequest<MerchantSmsRow[]>(`/admin/v1/merchants/${selectedMerchantId}/sms?mode=${merchantMode}&limit=20`, {
+        accessToken
+      })
+  });
+
+  const merchantAirtimeQuery = useQuery({
+    enabled: Boolean(selectedMerchantId),
+    queryKey: ["admin-merchant-airtime", accessToken, selectedMerchantId, merchantMode],
+    queryFn: () =>
+      apiRequest<AirtimeMerchantTabData>(`/admin/v1/merchants/${selectedMerchantId}/airtime?mode=${merchantMode}&limit=20`, {
+        accessToken
+      })
+  });
+
+  const merchantAirtimeLimitsQuery = useQuery({
+    enabled: Boolean(selectedMerchantId),
+    queryKey: ["admin-merchant-airtime-limits", accessToken, selectedMerchantId, merchantMode],
+    queryFn: () =>
+      apiRequest<AirtimeLimitsRow>(`/admin/v1/merchants/${selectedMerchantId}/airtime-limits?mode=${merchantMode}`, {
         accessToken
       })
   });
@@ -829,6 +1003,50 @@ export function AdminWorkspace({
       })
   });
 
+  const airtimeNetworksQuery = useQuery({
+    enabled: currentPage === "airtime",
+    queryKey: ["admin-airtime-networks", accessToken],
+    queryFn: () => apiRequest<AirtimeNetworkAdminRow[]>("/admin/v1/airtime/networks", { accessToken })
+  });
+
+  const airtimeDiscountPlansQuery = useQuery({
+    enabled: currentPage === "airtime",
+    queryKey: ["admin-airtime-discount-plans", accessToken],
+    queryFn: () => apiRequest<AirtimeDiscountPlanRow[]>("/admin/v1/airtime/discount-plans", { accessToken })
+  });
+
+  const airtimeDiscountOverridesQuery = useQuery({
+    enabled: currentPage === "airtime",
+    queryKey: ["admin-airtime-discount-overrides", accessToken],
+    queryFn: () => apiRequest<AirtimeDiscountPlanRow[]>("/admin/v1/airtime/discount-plans?scope=overrides", { accessToken })
+  });
+
+  const airtimeFloatsQuery = useQuery({
+    enabled: currentPage === "airtime",
+    queryKey: ["admin-airtime-floats", accessToken],
+    queryFn: () => apiRequest<AirtimeFloatRow[]>("/admin/v1/airtime/floats", { accessToken })
+  });
+
+  const airtimeFloatHistoryQuery = useQuery({
+    enabled: Boolean(selectedAirtimeFloat),
+    queryKey: ["admin-airtime-float-history", accessToken, selectedAirtimeFloat?.channel_id],
+    queryFn: () =>
+      apiRequest<AirtimeFloatHistoryRow[]>(`/admin/v1/airtime/floats/${selectedAirtimeFloat?.channel_id}/history?limit=48`, {
+        accessToken
+      })
+  });
+
+  const airtimeOrdersQuery = useQuery({
+    enabled: currentPage === "airtime",
+    queryKey: ["admin-airtime-orders", accessToken, airtimeOrderSearch, airtimeOrderMode],
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: "50" });
+      if (airtimeOrderSearch.trim()) params.set("q", airtimeOrderSearch.trim());
+      if (airtimeOrderMode) params.set("mode", airtimeOrderMode);
+      return apiRequest<AirtimeOrderAdminRow[]>(`/admin/v1/airtime/orders?${params.toString()}`, { accessToken });
+    }
+  });
+
   const feePlansQuery = useQuery({
     enabled: currentPage === "pricing",
     queryKey: ["admin-fee-plans", accessToken],
@@ -894,6 +1112,7 @@ export function AdminWorkspace({
         items: [
           { href: "/app/channels", icon: <Landmark className="size-4" />, label: "Channels" },
           { href: "/app/sender-ids", icon: <Send className="size-4" />, label: "Sender IDs" },
+          { href: "/app/airtime", icon: <CreditCard className="size-4" />, label: "Airtime" },
           { href: "/app/pricing", icon: <CircleDollarSign className="size-4" />, label: "Pricing & FX" },
           { href: "/app/admin-users", icon: <Users className="size-4" />, label: "Admin Users" },
           { href: "/app/audit", icon: <BookText className="size-4" />, label: "Audit" }
@@ -925,7 +1144,9 @@ export function AdminWorkspace({
       queryClient.invalidateQueries({ queryKey: ["admin-merchant-compliance"] }),
       queryClient.invalidateQueries({ queryKey: ["admin-merchant-freeze-history"] }),
       queryClient.invalidateQueries({ queryKey: ["admin-merchant-audit"] }),
-      queryClient.invalidateQueries({ queryKey: ["admin-merchants"] })
+      queryClient.invalidateQueries({ queryKey: ["admin-merchants"] }),
+      queryClient.invalidateQueries({ queryKey: ["admin-merchant-airtime"] }),
+      queryClient.invalidateQueries({ queryKey: ["admin-merchant-airtime-limits"] })
     ]);
   }
 
@@ -974,6 +1195,37 @@ export function AdminWorkspace({
       return next;
     });
   }, []);
+
+  const filteredChannels = React.useMemo(() => {
+    const rows = channelsQuery.data ?? [];
+    return channelKindFilter ? rows.filter((row) => row.kind === channelKindFilter) : rows;
+  }, [channelKindFilter, channelsQuery.data]);
+
+  const filteredFlags = React.useMemo(() => {
+    const query = flagSearch.trim().toLowerCase();
+    return (flagsQuery.data ?? []).filter((row) => {
+      if (flagRuleFilter && row.rule_code !== flagRuleFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return (
+        row.rule_code.toLowerCase().includes(query) ||
+        row.merchant_id.toLowerCase().includes(query) ||
+        row.summary.toLowerCase().includes(query)
+      );
+    });
+  }, [flagRuleFilter, flagSearch, flagsQuery.data]);
+
+  const airtimeFloatSummary = React.useMemo(() => {
+    const rows = airtimeFloatsQuery.data ?? [];
+    return {
+      below: rows.filter((row) => row.status === "low" || row.status === "empty").length,
+      empty: rows.filter((row) => row.status === "empty").length,
+      total: rows.length
+    };
+  }, [airtimeFloatsQuery.data]);
 
   const senderQueueSummary = React.useMemo(
     () =>
@@ -1025,11 +1277,35 @@ export function AdminWorkspace({
                 subtitle="Platform volume, merchant activity, reconciliation pressure, and channel health at a glance."
                 title="Overview"
               />
+              {overviewQuery.data && overviewQuery.data.low_float_channels.length > 0 ? (
+                <section className="flex flex-col gap-4 rounded-card border border-border bg-surface p-5 shadow-softer md:flex-row md:items-center md:justify-between">
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-10 items-center justify-center rounded-full bg-brand-50 text-brand">
+                      <AlertTriangle className="size-4" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-text">Airtime float is below threshold</p>
+                      <p className="text-sm text-text-secondary">
+                        {overviewQuery.data.low_float_channels
+                          .map((row) => `${row.provider_code} ${row.country_code}${row.network ? ` ${row.network}` : ""}`)
+                          .join(", ")}
+                      </p>
+                    </div>
+                  </div>
+                  <Link to="/app/airtime">
+                    <Button variant="secondary">Review float</Button>
+                  </Link>
+                </section>
+              ) : null}
               <SummaryCardGrid columns={4}>
                 <SummaryCard icon={<CircleDollarSign className="size-4" />} label="Platform volume today" value={overviewQuery.data ? formatMoney(BigInt(overviewQuery.data.platform_volume_today_minor), "GHS", "en-GH") : "-"} />
                 <SummaryCard icon={<Users className="size-4" />} label="Active merchants" value={overviewQuery.data?.active_merchants ?? 0} />
                 <SummaryCard icon={<FileWarning className="size-4" />} label="Open exceptions" value={overviewQuery.data?.open_exceptions ?? 0} />
                 <SummaryCard icon={<Landmark className="size-4" />} label="Channels tracked" value={overviewQuery.data?.channel_health.length ?? 0} />
+              </SummaryCardGrid>
+              <SummaryCardGrid columns={4}>
+                <SummaryCard icon={<CreditCard className="size-4" />} label="Airtime volume today" value={overviewQuery.data ? formatMoney(BigInt(overviewQuery.data.airtime_volume_today_minor), "GHS", "en-GH") : "-"} />
+                <SummaryCard icon={<AlertTriangle className="size-4" />} label="Low-float channels" value={overviewQuery.data?.low_float_channels.length ?? 0} />
               </SummaryCardGrid>
               <DataTable
                 columns={([
@@ -1266,12 +1542,25 @@ export function AdminWorkspace({
                     label: "Profile",
                     value: "profile",
                     content: (
-                      <SummaryCardGrid columns={4}>
-                        <SummaryCard icon={<Building2 className="size-4" />} label="Status" value={merchantDetailQuery.data?.status ?? "-"} />
-                        <SummaryCard icon={<ShieldCheck className="size-4" />} label="KYB tier" value={merchantComplianceQuery.data?.kyb_tier ?? "-"} />
-                        <SummaryCard icon={<CreditCard className="size-4" />} label="Collections" value={merchantDetailQuery.data?.products.collections_enabled ? "Enabled" : "Disabled"} />
-                        <SummaryCard icon={<Landmark className="size-4" />} label="Payouts" value={merchantDetailQuery.data?.products.payouts_enabled ? "Enabled" : "Disabled"} />
-                      </SummaryCardGrid>
+                      <>
+                        <SummaryCardGrid columns={4}>
+                          <SummaryCard icon={<Building2 className="size-4" />} label="Status" value={merchantDetailQuery.data?.status ?? "-"} />
+                          <SummaryCard icon={<ShieldCheck className="size-4" />} label="KYB tier" value={merchantComplianceQuery.data?.kyb_tier ?? "-"} />
+                          <SummaryCard icon={<CreditCard className="size-4" />} label="Collections" value={merchantDetailQuery.data?.products.collections_enabled ? "Enabled" : "Disabled"} />
+                          <SummaryCard icon={<Landmark className="size-4" />} label="Payouts" value={merchantDetailQuery.data?.products.payouts_enabled ? "Enabled" : "Disabled"} />
+                        </SummaryCardGrid>
+                        <SummaryCardGrid columns={4}>
+                          <SummaryCard icon={<Send className="size-4" />} label="SMS" value={merchantDetailQuery.data?.products.sms_enabled ? "Enabled" : "Disabled"} />
+                          <SummaryCard icon={<CreditCard className="size-4" />} label="Airtime" value={merchantDetailQuery.data?.products.airtime_enabled ? "Enabled" : merchantDetailQuery.data?.products.airtime_requested ? "Requested" : "Disabled"} />
+                        </SummaryCardGrid>
+                        {merchantDetailQuery.data ? (
+                          <MerchantFeatureForm
+                            accessToken={accessToken}
+                            detail={merchantDetailQuery.data}
+                            onSaved={() => void refreshMerchantDetail()}
+                          />
+                        ) : null}
+                      </>
                     )
                   },
                   {
@@ -1357,7 +1646,7 @@ export function AdminWorkspace({
                           { accessorKey: "created_at", header: "Date", cell: ({ row }) => formatDateTime(row.original.created_at) },
                           { accessorKey: "id", header: "Message" },
                           { accessorKey: "recipient", header: "Recipient" },
-                          { accessorKey: "price_minor", header: "Cost", cell: ({ row }) => formatMoney(BigInt(row.original.price_minor), merchantDetailQuery.data?.settlement_currency as never, "en-GH") },
+                          { accessorKey: "price_minor", header: "Cost", cell: ({ row }) => formatAdminMoney(row.original.price_minor, merchantDetailQuery.data?.settlement_currency) },
                           { accessorKey: "status", header: "Status" }
                         ] as ColumnDef<MerchantSmsRow>[]) }
                         data={merchantSmsQuery.data ?? []}
@@ -1365,6 +1654,41 @@ export function AdminWorkspace({
                         loading={merchantSmsQuery.isLoading}
                         pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 20 }}
                       />
+                    )
+                  },
+                  {
+                    label: "Airtime",
+                    value: "airtime",
+                    content: (
+                      <div className="space-y-4">
+                        <SummaryCardGrid columns={4}>
+                          <SummaryCard icon={<CreditCard className="size-4" />} label="Spend today" value={formatAdminMoney(merchantAirtimeQuery.data?.spend.today_charge_minor, merchantDetailQuery.data?.settlement_currency)} />
+                          <SummaryCard icon={<Send className="size-4" />} label="Orders today" value={merchantAirtimeQuery.data?.spend.today_count ?? 0} />
+                          <SummaryCard icon={<CircleDollarSign className="size-4" />} label="Merchant daily cap" value={formatAdminMoney(merchantAirtimeLimitsQuery.data?.merchant_daily_cap_minor, merchantDetailQuery.data?.settlement_currency)} />
+                          <SummaryCard icon={<CircleDollarSign className="size-4" />} label="Number daily cap" value={formatAdminMoney(merchantAirtimeLimitsQuery.data?.number_daily_cap_minor, merchantDetailQuery.data?.settlement_currency)} />
+                        </SummaryCardGrid>
+                        {selectedMerchantId && merchantAirtimeLimitsQuery.data ? (
+                          <MerchantAirtimeLimitsForm
+                            accessToken={accessToken}
+                            limits={merchantAirtimeLimitsQuery.data}
+                            merchantId={selectedMerchantId}
+                            onSaved={() => void refreshMerchantDetail()}
+                          />
+                        ) : null}
+                        <DataTable
+                          columns={([
+                            { accessorKey: "created_at", header: "Date", cell: ({ row }) => formatDateTime(row.original.created_at) },
+                            { accessorKey: "id", header: "ID" },
+                            { accessorKey: "phone", header: "Phone" },
+                            { accessorKey: "charge_amount", header: "Charge", cell: ({ row }) => formatMoney(BigInt(row.original.charge_amount), row.original.charge_currency as never, "en-GH") },
+                            { accessorKey: "status", header: "Status" }
+                          ] as ColumnDef<AirtimeOrderAdminRow>[]) }
+                          data={merchantAirtimeQuery.data?.orders ?? []}
+                          emptyState={<EmptyState description="Airtime orders will appear here when this merchant starts sending top-ups." title="No airtime orders yet" />}
+                          loading={merchantAirtimeQuery.isLoading}
+                          pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 20 }}
+                        />
+                      </div>
                     )
                   },
                   {
@@ -1512,16 +1836,38 @@ export function AdminWorkspace({
 
           {currentPage === "compliance-flags" ? (
             <>
-              <PageHeader subtitle="Investigate velocity and compliance review flags raised by platform controls." title="Compliance Flags" />
+              <PageHeader subtitle="Investigate velocity and compliance review flags raised by platform controls, including airtime number velocity from A1." title="Compliance Flags" />
+              <FilterBar
+                filters={[
+                  <Select
+                    key="flag-rule"
+                    label="Rule"
+                    onValueChange={setFlagRuleFilter}
+                    options={[
+                      { label: "All rules", value: "" },
+                      { label: "Airtime velocity", value: "airtime.number_velocity" },
+                      { label: "Collection velocity", value: "collections.phone_velocity" }
+                    ]}
+                    value={flagRuleFilter}
+                  />
+                ]}
+                onReset={() => {
+                  setFlagRuleFilter("");
+                  setFlagSearch("");
+                }}
+                onSearchChange={setFlagSearch}
+                placeholder="Search rule, merchant, or summary"
+                searchValue={flagSearch}
+              />
               <DataTable
                 columns={([
                   { accessorKey: "created_at", header: "Created", cell: ({ row }) => formatDateTime(row.original.created_at) },
-                  { accessorKey: "rule_code", header: "Rule" },
+                  { accessorKey: "rule_code", header: "Rule", cell: ({ row }) => (row.original.rule_code === "airtime.number_velocity" ? "Airtime velocity" : row.original.rule_code) },
                   { accessorKey: "merchant_id", header: "Merchant" },
                   { accessorKey: "summary", header: "Summary" },
                   { accessorKey: "status", header: "Status" }
                 ] as ColumnDef<ComplianceFlagRow>[]) }
-                data={flagsQuery.data ?? []}
+                data={filteredFlags}
                 emptyState={<EmptyState description="Open review flags will appear here when the platform detects risky activity." title="No open flags" />}
                 loading={flagsQuery.isLoading}
                 onRowClick={(row) => setSelectedFlag(row)}
@@ -1539,20 +1885,35 @@ export function AdminWorkspace({
                     label: "Channels",
                     value: "channels",
                     content: (
-                      <DataTable
-                        columns={([
-                          { accessorKey: "provider_code", header: "Provider" },
-                          { accessorKey: "country_code", header: "Country" },
-                          { accessorKey: "kind", header: "Kind" },
-                          { accessorKey: "health", header: "Health", cell: ({ row }) => <StatusBadge status={(row.original.health === "healthy" ? "approved" : row.original.health === "degraded" ? "pending" : "rejected") as never} /> },
-                          { accessorKey: "status", header: "Status" }
-                        ] as ColumnDef<ChannelRow>[]) }
-                        data={channelsQuery.data ?? []}
-                        emptyState={<EmptyState description="Configured provider channels will appear here." title="No channels configured" />}
-                        loading={channelsQuery.isLoading}
-                        onRowClick={(row) => setSelectedChannel(row)}
-                        pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 50 }}
-                      />
+                      <div className="space-y-4">
+                        <Select
+                          label="Kind"
+                          onValueChange={setChannelKindFilter}
+                          options={[
+                            { label: "All kinds", value: "" },
+                            { label: "Mobile money", value: "mobile_money" },
+                            { label: "Airtime", value: "airtime" },
+                            { label: "SMS", value: "sms" },
+                            { label: "Card", value: "card" },
+                            { label: "Bank", value: "bank" }
+                          ]}
+                          value={channelKindFilter}
+                        />
+                        <DataTable
+                          columns={([
+                            { accessorKey: "provider_code", header: "Provider" },
+                            { accessorKey: "country_code", header: "Country" },
+                            { accessorKey: "kind", header: "Kind" },
+                            { accessorKey: "health", header: "Health", cell: ({ row }) => <StatusBadge status={(row.original.health === "healthy" ? "approved" : row.original.health === "degraded" ? "pending" : "rejected") as never} /> },
+                            { accessorKey: "status", header: "Status" }
+                          ] as ColumnDef<ChannelRow>[]) }
+                          data={filteredChannels}
+                          emptyState={<EmptyState description="Configured provider channels will appear here." title="No channels configured" />}
+                          loading={channelsQuery.isLoading}
+                          onRowClick={(row) => setSelectedChannel(row)}
+                          pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 50 }}
+                        />
+                      </div>
                     )
                   },
                   {
@@ -1755,6 +2116,411 @@ export function AdminWorkspace({
             </>
           ) : null}
 
+          {currentPage === "airtime" ? (
+            <>
+              <PageHeader
+                subtitle="Networks, merchant discounts, provider float, and global airtime order search."
+                title="Airtime"
+              />
+              <SummaryCardGrid columns={4}>
+                <SummaryCard icon={<CreditCard className="size-4" />} label="Networks" value={airtimeNetworksQuery.data?.length ?? 0} />
+                <SummaryCard icon={<CircleDollarSign className="size-4" />} label="Default discounts" value={airtimeDiscountPlansQuery.data?.length ?? 0} />
+                <SummaryCard icon={<AlertTriangle className="size-4" />} label="Below threshold" value={airtimeFloatSummary.below} />
+                <SummaryCard icon={<Search className="size-4" />} label="Orders in view" value={airtimeOrdersQuery.data?.length ?? 0} />
+              </SummaryCardGrid>
+              <Tabs
+                items={[
+                  {
+                    label: "Networks",
+                    value: "networks",
+                    content: (
+                      <DataTable
+                        columns={([
+                          { accessorKey: "country_code", header: "Country" },
+                          { accessorKey: "network", header: "Network" },
+                          { accessorKey: "currency", header: "Currency" },
+                          { accessorKey: "min_amount", header: "Min", cell: ({ row }) => formatMoney(BigInt(row.original.min_amount), row.original.currency as never, "en-GH") },
+                          { accessorKey: "max_amount", header: "Max", cell: ({ row }) => formatMoney(BigInt(row.original.max_amount), row.original.currency as never, "en-GH") },
+                          { accessorKey: "fixed_denominations", header: "Denoms", cell: ({ row }) => (row.original.fixed_denominations?.length ? `${row.original.fixed_denominations.length} fixed` : "Range") },
+                          { accessorKey: "active", header: "Active", cell: ({ row }) => (row.original.active ? "Yes" : "No") }
+                        ] as ColumnDef<AirtimeNetworkAdminRow>[]) }
+                        data={airtimeNetworksQuery.data ?? []}
+                        emptyState={<EmptyState description="Seeded launch networks will appear here after the airtime migration." title="No airtime networks" />}
+                        loading={airtimeNetworksQuery.isLoading}
+                        onRowClick={(row) => {
+                          setAirtimeNetworkDraft(row);
+                          setAirtimeNetworkMin(String(row.min_amount));
+                          setAirtimeNetworkMax(String(row.max_amount));
+                          setAirtimeNetworkActive(row.active);
+                          setAirtimeNetworkDenoms((row.fixed_denominations ?? []).join(", "));
+                        }}
+                        pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 50 }}
+                      />
+                    )
+                  },
+                  {
+                    label: "Discount plans",
+                    value: "discounts",
+                    content: (
+                      <Tabs
+                        items={[
+                          {
+                            label: "Defaults",
+                            value: "defaults",
+                            content: (
+                              <div className="space-y-4">
+                                <div className="grid gap-3 md:grid-cols-4">
+                                  <Input label="Country" onChange={(event) => setAirtimeDiscountCountry(event.target.value.toUpperCase())} value={airtimeDiscountCountry} />
+                                  <Input label="Network" onChange={(event) => setAirtimeDiscountNetwork(event.target.value.toUpperCase())} value={airtimeDiscountNetwork} />
+                                  <Input label="Discount (bps)" onChange={(event) => setAirtimeDiscountBps(event.target.value)} value={airtimeDiscountBps} />
+                                  <Input label="Reason" onChange={(event) => setAirtimeDiscountReason(event.target.value)} value={airtimeDiscountReason} />
+                                </div>
+                                <Button
+                                  loading={airtimeSaving}
+                                  onClick={() => {
+                                    if (!airtimeDiscountReason.trim() || airtimeSaving) {
+                                      return;
+                                    }
+                                    setAirtimeSaving(true);
+                                    void apiRequest("/admin/v1/airtime/discount-plans", {
+                                      accessToken,
+                                      body: JSON.stringify({
+                                        country_code: airtimeDiscountCountry,
+                                        discount_bps: Number(airtimeDiscountBps),
+                                        merchant_id: null,
+                                        mode: null,
+                                        network: airtimeDiscountNetwork,
+                                        reason: airtimeDiscountReason
+                                      }),
+                                      method: "PUT"
+                                    })
+                                      .then(async () => {
+                                        pushToast({ description: "The default discount was saved.", title: "Discount updated", variant: "success" });
+                                        await queryClient.invalidateQueries({ queryKey: ["admin-airtime-discount-plans"] });
+                                      })
+                                      .catch((error: unknown) => {
+                                        pushToast({
+                                          description: error instanceof ApiError ? error.message : "Unable to save the discount plan.",
+                                          title: "Update failed",
+                                          variant: "danger"
+                                        });
+                                      })
+                                      .finally(() => setAirtimeSaving(false));
+                                  }}
+                                  variant="primary"
+                                >
+                                  Save default discount
+                                </Button>
+                                <DataTable
+                                  columns={([
+                                    { accessorKey: "country_code", header: "Country" },
+                                    { accessorKey: "network", header: "Network" },
+                                    { accessorKey: "discount_bps", header: "Discount (bps)" },
+                                    { accessorKey: "active", header: "Active", cell: ({ row }) => (row.original.active ? "Yes" : "No") }
+                                  ] as ColumnDef<AirtimeDiscountPlanRow>[]) }
+                                  data={airtimeDiscountPlansQuery.data ?? []}
+                                  emptyState={<EmptyState description="Default discounts are seeded with the airtime migration." title="No discount plans" />}
+                                  loading={airtimeDiscountPlansQuery.isLoading}
+                                  pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 50 }}
+                                />
+                              </div>
+                            )
+                          },
+                          {
+                            label: "Merchant overrides",
+                            value: "overrides",
+                            content: (
+                              <div className="space-y-4">
+                                <div className="grid gap-3 md:grid-cols-3">
+                                  <Input label="Merchant ID" onChange={(event) => setAirtimeOverrideMerchantId(event.target.value)} value={airtimeOverrideMerchantId} />
+                                  <Select
+                                    label="Mode"
+                                    onValueChange={(value) => setAirtimeOverrideMode(value as Mode)}
+                                    options={[
+                                      { label: "Live", value: "live" },
+                                      { label: "Test", value: "test" }
+                                    ]}
+                                    value={airtimeOverrideMode}
+                                  />
+                                  <Input label="Country" onChange={(event) => setAirtimeOverrideCountry(event.target.value.toUpperCase())} value={airtimeOverrideCountry} />
+                                  <Input label="Network" onChange={(event) => setAirtimeOverrideNetwork(event.target.value.toUpperCase())} value={airtimeOverrideNetwork} />
+                                  <Input label="Discount (bps)" onChange={(event) => setAirtimeOverrideBps(event.target.value)} value={airtimeOverrideBps} />
+                                  <Input label="Reason" onChange={(event) => setAirtimeOverrideReason(event.target.value)} value={airtimeOverrideReason} />
+                                </div>
+                                <Button
+                                  loading={airtimeSaving}
+                                  onClick={() => {
+                                    if (!airtimeOverrideMerchantId.trim() || !airtimeOverrideReason.trim() || airtimeSaving) {
+                                      return;
+                                    }
+                                    setAirtimeSaving(true);
+                                    void apiRequest("/admin/v1/airtime/discount-plans", {
+                                      accessToken,
+                                      body: JSON.stringify({
+                                        country_code: airtimeOverrideCountry,
+                                        discount_bps: Number(airtimeOverrideBps),
+                                        merchant_id: airtimeOverrideMerchantId.trim(),
+                                        mode: airtimeOverrideMode,
+                                        network: airtimeOverrideNetwork,
+                                        reason: airtimeOverrideReason
+                                      }),
+                                      method: "PUT"
+                                    })
+                                      .then(async () => {
+                                        pushToast({ description: "The merchant override was saved and audited.", title: "Override updated", variant: "success" });
+                                        setAirtimeOverrideReason("");
+                                        await queryClient.invalidateQueries({ queryKey: ["admin-airtime-discount-overrides"] });
+                                      })
+                                      .catch((error: unknown) => {
+                                        pushToast({
+                                          description: error instanceof ApiError ? error.message : "Unable to save the merchant override.",
+                                          title: "Update failed",
+                                          variant: "danger"
+                                        });
+                                      })
+                                      .finally(() => setAirtimeSaving(false));
+                                  }}
+                                  variant="primary"
+                                >
+                                  Save merchant override
+                                </Button>
+                                <DataTable
+                                  columns={([
+                                    { accessorKey: "merchant_id", header: "Merchant" },
+                                    { accessorKey: "mode", header: "Mode" },
+                                    { accessorKey: "country_code", header: "Country" },
+                                    { accessorKey: "network", header: "Network" },
+                                    { accessorKey: "discount_bps", header: "Discount (bps)" },
+                                    { accessorKey: "active", header: "Active", cell: ({ row }) => (row.original.active ? "Yes" : "No") }
+                                  ] as ColumnDef<AirtimeDiscountPlanRow>[]) }
+                                  data={airtimeDiscountOverridesQuery.data ?? []}
+                                  emptyState={<EmptyState description="Per-merchant discount overrides appear here after a reasoned save." title="No merchant overrides" />}
+                                  loading={airtimeDiscountOverridesQuery.isLoading}
+                                  pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 50 }}
+                                />
+                              </div>
+                            )
+                          }
+                        ]}
+                      />
+                    )
+                  },
+                  {
+                    label: "Float",
+                    value: "float",
+                    content: (
+                      <div className="space-y-4">
+                        <SummaryCardGrid columns={4}>
+                          <SummaryCard icon={<Landmark className="size-4" />} label="Channels" value={airtimeFloatSummary.total} />
+                          <SummaryCard icon={<AlertTriangle className="size-4" />} label="Below threshold" value={airtimeFloatSummary.below} />
+                          <SummaryCard icon={<FileWarning className="size-4" />} label="Empty" value={airtimeFloatSummary.empty} />
+                          <SummaryCard icon={<Activity className="size-4" />} label="Last check" value={airtimeFloatsQuery.data?.some((row) => row.checked_at) ? "Recorded" : "-"} />
+                        </SummaryCardGrid>
+                        <DataTable
+                          columns={([
+                            { accessorKey: "provider_code", header: "Provider" },
+                            { accessorKey: "country_code", header: "Country" },
+                            { accessorKey: "network", header: "Network" },
+                            { accessorKey: "balance_minor", header: "Balance", cell: ({ row }) => (row.original.balance_minor === null ? "-" : formatMoney(BigInt(row.original.balance_minor), (row.original.currency ?? "ZMW") as never, "en-GH")) },
+                            { accessorKey: "threshold_minor", header: "Threshold", cell: ({ row }) => (row.original.threshold_minor === null ? "-" : formatMoney(BigInt(row.original.threshold_minor), (row.original.currency ?? "ZMW") as never, "en-GH")) },
+                            { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge status={airtimeFloatBadge(row.original.status)} /> },
+                            { accessorKey: "checked_at", header: "Checked", cell: ({ row }) => (row.original.checked_at ? formatDateTime(row.original.checked_at) : "-") }
+                          ] as ColumnDef<AirtimeFloatRow>[]) }
+                          data={airtimeFloatsQuery.data ?? []}
+                          emptyState={<EmptyState description="Float snapshots appear after the 5-minute monitor runs." title="No float readings" />}
+                          loading={airtimeFloatsQuery.isLoading}
+                          onRowClick={(row) => {
+                            setSelectedAirtimeFloat(row);
+                            setAirtimeFloatThreshold(row.threshold_minor === null ? "" : String(row.threshold_minor));
+                            setAirtimeFloatReason("");
+                          }}
+                          pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 50 }}
+                        />
+                      </div>
+                    )
+                  },
+                  {
+                    label: "Orders",
+                    value: "orders",
+                    content: (
+                      <div className="space-y-4">
+                        <FilterBar
+                          filters={[
+                            <Select
+                              key="airtime-order-mode"
+                              label="Mode"
+                              onValueChange={setAirtimeOrderMode}
+                              options={[
+                                { label: "All modes", value: "" },
+                                { label: "Live", value: "live" },
+                                { label: "Test", value: "test" }
+                              ]}
+                              value={airtimeOrderMode}
+                            />
+                          ]}
+                          onReset={() => {
+                            setAirtimeOrderMode("");
+                            setAirtimeOrderSearch("");
+                          }}
+                          onSearchChange={setAirtimeOrderSearch}
+                          placeholder="Search air_ id, phone, reference, or provider ref"
+                          searchValue={airtimeOrderSearch}
+                        />
+                        <DataTable
+                          columns={([
+                            { accessorKey: "created_at", header: "Date", cell: ({ row }) => formatDateTime(row.original.created_at) },
+                            { accessorKey: "id", header: "ID" },
+                            { accessorKey: "merchant_id", header: "Merchant" },
+                            { accessorKey: "phone", header: "Phone" },
+                            { accessorKey: "charge_amount", header: "Charge", cell: ({ row }) => formatMoney(BigInt(row.original.charge_amount), row.original.charge_currency as never, "en-GH") },
+                            { accessorKey: "status", header: "Status" }
+                          ] as ColumnDef<AirtimeOrderAdminRow>[]) }
+                          data={airtimeOrdersQuery.data ?? []}
+                          emptyState={<EmptyState description="Search by air_ id, phone, merchant reference, or provider reference." title="No airtime orders" />}
+                          loading={airtimeOrdersQuery.isLoading}
+                          onRowClick={(row) => setSelectedAirtimeOrder(row)}
+                          pageInfo={{ hasNextPage: false, hasPreviousPage: false, limit: 50 }}
+                        />
+                      </div>
+                    )
+                  }
+                ]}
+              />
+              <Drawer
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setAirtimeNetworkDraft(null);
+                  }
+                }}
+                open={Boolean(airtimeNetworkDraft)}
+                title="Edit airtime network"
+              >
+                {airtimeNetworkDraft ? (
+                  <div className="space-y-4">
+                    <p className="text-sm text-text-secondary">
+                      {airtimeNetworkDraft.network} {airtimeNetworkDraft.country_code}
+                    </p>
+                    <Checkbox checked={airtimeNetworkActive} label="Active" onChange={() => setAirtimeNetworkActive((current) => !current)} />
+                    <Input label="Minimum (minor units)" onChange={(event) => setAirtimeNetworkMin(event.target.value)} value={airtimeNetworkMin} />
+                    <Input label="Maximum (minor units)" onChange={(event) => setAirtimeNetworkMax(event.target.value)} value={airtimeNetworkMax} />
+                    <Input label="Fixed denominations (minor units, comma-separated)" onChange={(event) => setAirtimeNetworkDenoms(event.target.value)} value={airtimeNetworkDenoms} />
+                    <Input label="Reason" onChange={(event) => setAirtimeNetworkReason(event.target.value)} value={airtimeNetworkReason} />
+                    <Button
+                      loading={airtimeSaving}
+                      onClick={() => {
+                        if (!airtimeNetworkDraft || !airtimeNetworkReason.trim() || airtimeSaving) {
+                          return;
+                        }
+                        setAirtimeSaving(true);
+                        void apiRequest(`/admin/v1/airtime/networks/${airtimeNetworkDraft.country_code}/${airtimeNetworkDraft.network}`, {
+                          accessToken,
+                          body: JSON.stringify({
+                            active: airtimeNetworkActive,
+                            currency: airtimeNetworkDraft.currency,
+                            fixed_denominations: parseDenominations(airtimeNetworkDenoms),
+                            max_amount: Number(airtimeNetworkMax),
+                            min_amount: Number(airtimeNetworkMin),
+                            reason: airtimeNetworkReason
+                          }),
+                          method: "PUT"
+                        })
+                          .then(async () => {
+                            pushToast({ description: "The network limits were saved.", title: "Network updated", variant: "success" });
+                            setAirtimeNetworkDraft(null);
+                            await queryClient.invalidateQueries({ queryKey: ["admin-airtime-networks"] });
+                          })
+                          .catch((error: unknown) => {
+                            pushToast({
+                              description: error instanceof ApiError ? error.message : "Unable to update this network.",
+                              title: "Update failed",
+                              variant: "danger"
+                            });
+                          })
+                          .finally(() => setAirtimeSaving(false));
+                      }}
+                      variant="primary"
+                    >
+                      Save network
+                    </Button>
+                  </div>
+                ) : null}
+              </Drawer>
+              <Drawer
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setSelectedAirtimeFloat(null);
+                  }
+                }}
+                open={Boolean(selectedAirtimeFloat)}
+                title="Airtime float"
+              >
+                {selectedAirtimeFloat ? (
+                  <div className="space-y-4">
+                    <CopyField label="Channel ID" value={selectedAirtimeFloat.channel_id} />
+                    <p className="text-sm text-text-secondary">
+                      {selectedAirtimeFloat.provider_code} · {selectedAirtimeFloat.country_code}
+                      {selectedAirtimeFloat.network ? ` · ${selectedAirtimeFloat.network}` : ""}
+                    </p>
+                    <StatusBadge status={airtimeFloatBadge(selectedAirtimeFloat.status)} />
+                    <AirtimeFloatHistoryChart
+                      currency={selectedAirtimeFloat.currency ?? "ZMW"}
+                      points={airtimeFloatHistoryQuery.data ?? []}
+                    />
+                    <Input label="Low-float threshold (minor units)" onChange={(event) => setAirtimeFloatThreshold(event.target.value)} value={airtimeFloatThreshold} />
+                    <Input label="Reason" onChange={(event) => setAirtimeFloatReason(event.target.value)} value={airtimeFloatReason} />
+                    <Button
+                      loading={airtimeSaving}
+                      onClick={() => {
+                        if (!selectedAirtimeFloat || !airtimeFloatReason.trim() || airtimeSaving) {
+                          return;
+                        }
+                        setAirtimeSaving(true);
+                        void apiRequest(`/admin/v1/airtime/floats/${selectedAirtimeFloat.channel_id}`, {
+                          accessToken,
+                          body: JSON.stringify({
+                            reason: airtimeFloatReason,
+                            threshold_minor: Number(airtimeFloatThreshold)
+                          }),
+                          method: "PUT"
+                        })
+                          .then(async () => {
+                            pushToast({ description: "The float threshold was saved.", title: "Threshold updated", variant: "success" });
+                            setSelectedAirtimeFloat(null);
+                            await queryClient.invalidateQueries({ queryKey: ["admin-airtime-floats"] });
+                          })
+                          .catch((error: unknown) => {
+                            pushToast({
+                              description: error instanceof ApiError ? error.message : "Unable to update this threshold.",
+                              title: "Update failed",
+                              variant: "danger"
+                            });
+                          })
+                          .finally(() => setAirtimeSaving(false));
+                      }}
+                      variant="primary"
+                    >
+                      Save threshold
+                    </Button>
+                  </div>
+                ) : null}
+              </Drawer>
+              <Drawer onOpenChange={(open) => !open && setSelectedAirtimeOrder(null)} open={Boolean(selectedAirtimeOrder)} title="Airtime order">
+                {selectedAirtimeOrder ? (
+                  <div className="space-y-4">
+                    <CopyField label="Order ID" value={selectedAirtimeOrder.id} />
+                    <CopyField label="Merchant" value={selectedAirtimeOrder.merchant_id} />
+                    <CopyField label="Phone" value={selectedAirtimeOrder.phone} />
+                    <CopyField label="Reference" value={selectedAirtimeOrder.reference ?? "-"} />
+                    <CopyField label="Provider ref" value={selectedAirtimeOrder.provider_ref ?? "-"} />
+                    <p className="text-sm text-text-secondary">
+                      {formatMoney(BigInt(selectedAirtimeOrder.amount), selectedAirtimeOrder.currency as never, "en-GH")} face value · charged {formatMoney(BigInt(selectedAirtimeOrder.charge_amount), selectedAirtimeOrder.charge_currency as never, "en-GH")}
+                    </p>
+                  </div>
+                ) : null}
+              </Drawer>
+            </>
+          ) : null}
+
           {currentPage === "pricing" ? (
             <>
               <PageHeader
@@ -1830,7 +2596,15 @@ export function AdminWorkspace({
 
           {currentPage === "admin-users" ? (
             <>
-              <PageHeader subtitle="View current platform admin users, roles, and activation state." title="Admin Users" />
+              <PageHeader
+                action={
+                  <Button onClick={() => setAdminUserOpen(true)} variant="primary">
+                    Add admin
+                  </Button>
+                }
+                subtitle="View current platform admin users, roles, and activation state."
+                title="Admin Users"
+              />
               <DataTable
                 columns={([
                   { accessorKey: "full_name", header: "Name" },
@@ -1882,7 +2656,14 @@ export function AdminWorkspace({
       </AppShell>
 
       <Drawer onOpenChange={(open) => !open && setSelectedFlag(null)} open={Boolean(selectedFlag)} title="Compliance flag">
-        {selectedFlag ? <Textarea label="Payload" readOnly value={JSON.stringify(selectedFlag.payload ?? {}, null, 2)} /> : null}
+        {selectedFlag ? (
+          <div className="space-y-4">
+            <CopyField label="Rule" value={selectedFlag.rule_code === "airtime.number_velocity" ? "Airtime velocity" : selectedFlag.rule_code} />
+            <CopyField label="Merchant" value={selectedFlag.merchant_id} />
+            <Textarea label="Summary" readOnly value={selectedFlag.summary} />
+            <Textarea label="Payload" readOnly value={JSON.stringify(selectedFlag.payload ?? {}, null, 2)} />
+          </div>
+        ) : null}
       </Drawer>
 
       <Drawer onOpenChange={(open) => !open && setSelectedChannel(null)} open={Boolean(selectedChannel)} title="Channel detail">
@@ -2252,6 +3033,358 @@ export function AdminWorkspace({
           </Button>
         </div>
       </Modal>
+      <CreateAdminUserModal
+        accessToken={accessToken}
+        onCreated={() => void queryClient.invalidateQueries({ queryKey: ["admin-users"] })}
+        onOpenChange={setAdminUserOpen}
+        open={adminUserOpen}
+      />
     </>
+  );
+}
+
+function AirtimeFloatHistoryChart({
+  currency,
+  points
+}: {
+  currency: string;
+  points: AirtimeFloatHistoryRow[];
+}) {
+  const maxBalance = Math.max(
+    1,
+    ...points.map((point) => point.balance_minor ?? 0),
+    ...points.map((point) => point.threshold_minor)
+  );
+
+  if (points.length === 0) {
+    return <EmptyState description="History appears after the float monitor writes snapshots." title="No float history yet" />;
+  }
+
+  return (
+    <section className="space-y-3 rounded-card border border-border bg-surface-subtle p-4">
+      <p className="text-sm font-medium text-text">Float history</p>
+      <div className="flex h-32 items-end gap-1">
+        {points.map((point) => {
+          const height = Math.max(6, Math.round(((point.balance_minor ?? 0) / maxBalance) * 100));
+          const low = point.status === "low" || point.status === "empty";
+          return (
+            <div
+              key={point.id}
+              className={`min-w-0 flex-1 rounded-t ${low ? "bg-brand-600" : "bg-brand-200"}`}
+              style={{ height: `${height}%` }}
+              title={`${formatDateTime(point.checked_at)} · ${point.balance_minor === null ? "unknown" : formatMoney(BigInt(point.balance_minor), (point.currency ?? currency) as never, "en-GH")}`}
+            />
+          );
+        })}
+      </div>
+      <p className="text-xs text-text-secondary">
+        Latest {points[points.length - 1]?.balance_minor === null
+          ? "-"
+          : formatMoney(BigInt(points[points.length - 1]?.balance_minor ?? 0), (points[points.length - 1]?.currency ?? currency) as never, "en-GH")}
+        {" "}
+        · threshold {formatMoney(BigInt(points[points.length - 1]?.threshold_minor ?? 0), currency as never, "en-GH")}
+      </p>
+    </section>
+  );
+}
+
+function MerchantAirtimeLimitsForm({
+  accessToken,
+  limits,
+  merchantId,
+  onSaved
+}: {
+  accessToken: string;
+  limits: AirtimeLimitsRow;
+  merchantId: string;
+  onSaved: () => void;
+}) {
+  const { pushToast } = useToast();
+  const [merchantCap, setMerchantCap] = React.useState(String(limits.merchant_daily_cap_minor));
+  const [numberCap, setNumberCap] = React.useState(String(limits.number_daily_cap_minor));
+  const [velocity, setVelocity] = React.useState(String(limits.velocity_per_number));
+  const [reason, setReason] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    setMerchantCap(String(limits.merchant_daily_cap_minor));
+    setNumberCap(String(limits.number_daily_cap_minor));
+    setVelocity(String(limits.velocity_per_number));
+  }, [limits]);
+
+  return (
+    <section className="space-y-4 rounded-card border border-border bg-white p-4">
+      <div>
+        <h3 className="text-base font-semibold text-text">Airtime limits</h3>
+        <p className="mt-1 text-sm text-text-secondary">
+          Daily caps per merchant and per recipient number. A reason is required and the change is audited.
+        </p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        <Input label="Merchant daily cap (minor units)" onChange={(event) => setMerchantCap(event.target.value)} value={merchantCap} />
+        <Input label="Number daily cap (minor units)" onChange={(event) => setNumberCap(event.target.value)} value={numberCap} />
+        <Input label="Velocity per number" onChange={(event) => setVelocity(event.target.value)} value={velocity} />
+      </div>
+      <Input label="Reason" onChange={(event) => setReason(event.target.value)} value={reason} />
+      <Button
+        loading={saving}
+        onClick={() => {
+          if (!reason.trim() || saving) {
+            return;
+          }
+          setSaving(true);
+          void apiRequest(`/admin/v1/merchants/${merchantId}/airtime-limits`, {
+            accessToken,
+            body: JSON.stringify({
+              merchant_daily_cap_minor: Number(merchantCap),
+              mode: limits.mode,
+              number_daily_cap_minor: Number(numberCap),
+              reason,
+              velocity_per_number: Number(velocity)
+            }),
+            method: "PUT"
+          })
+            .then(() => {
+              pushToast({ description: "Airtime limits were saved.", title: "Limits updated", variant: "success" });
+              onSaved();
+            })
+            .catch((error: unknown) => {
+              pushToast({
+                description: error instanceof ApiError ? error.message : "Unable to update airtime limits.",
+                title: "Update failed",
+                variant: "danger"
+              });
+            })
+            .finally(() => setSaving(false));
+        }}
+        variant="primary"
+      >
+        Save airtime limits
+      </Button>
+    </section>
+  );
+}
+
+function MerchantFeatureForm({
+  accessToken,
+  detail,
+  onSaved
+}: {
+  accessToken: string;
+  detail: MerchantDetailData;
+  onSaved: () => void;
+}) {
+  const { pushToast } = useToast();
+  const [collections, setCollections] = React.useState(detail.products.collections_enabled);
+  const [payouts, setPayouts] = React.useState(detail.products.payouts_enabled);
+  const [smsBroadcast, setSmsBroadcast] = React.useState(detail.products.sms_broadcast_enabled);
+  const [smsApi, setSmsApi] = React.useState(detail.products.sms_api_enabled);
+  const [airtime, setAirtime] = React.useState(detail.products.airtime_enabled);
+  const [collectionMax, setCollectionMax] = React.useState("1000000");
+  const [payoutMax, setPayoutMax] = React.useState("1000000");
+  const [airtimeMerchantCap, setAirtimeMerchantCap] = React.useState("10000000");
+  const [airtimeNumberCap, setAirtimeNumberCap] = React.useState("100000");
+  const [airtimeVelocity, setAirtimeVelocity] = React.useState("5");
+  const [reason, setReason] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    setCollections(detail.products.collections_enabled);
+    setPayouts(detail.products.payouts_enabled);
+    setSmsBroadcast(detail.products.sms_broadcast_enabled);
+    setSmsApi(detail.products.sms_api_enabled);
+    setAirtime(detail.products.airtime_enabled);
+  }, [detail]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void apiRequest<AirtimeLimitsRow>(`/admin/v1/merchants/${detail.id}/airtime-limits?mode=${detail.mode}`, {
+      accessToken
+    })
+      .then((limits) => {
+        if (cancelled) {
+          return;
+        }
+        setAirtimeMerchantCap(String(limits.merchant_daily_cap_minor));
+        setAirtimeNumberCap(String(limits.number_daily_cap_minor));
+        setAirtimeVelocity(String(limits.velocity_per_number));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, detail.id, detail.mode]);
+
+  return (
+    <section className="mt-4 space-y-4 rounded-card border border-border bg-white p-4">
+      <div>
+        <h3 className="text-base font-semibold text-text">Assigned products</h3>
+        <p className="mt-1 text-sm text-text-secondary">
+          The merchant dashboard only shows the products you enable. Live money movement still requires an active KYB status.
+        </p>
+      </div>
+      <Checkbox
+        checked={collections}
+        label={detail.products.collections_requested ? "Collections (requested)" : "Collections"}
+        onChange={() => setCollections((current) => !current)}
+      />
+      <Checkbox
+        checked={payouts}
+        label={detail.products.payouts_requested ? "Payouts (requested)" : "Payouts"}
+        onChange={() => setPayouts((current) => !current)}
+      />
+      <Checkbox
+        checked={smsBroadcast}
+        label={detail.products.sms_requested ? "SMS broadcast (requested)" : "SMS broadcast"}
+        onChange={() => setSmsBroadcast((current) => !current)}
+      />
+      <Checkbox
+        checked={smsApi}
+        label={detail.products.sms_requested ? "SMS API (requested)" : "SMS API"}
+        onChange={() => setSmsApi((current) => !current)}
+      />
+      <Checkbox
+        checked={airtime}
+        label={detail.products.airtime_requested ? "Send airtime (requested)" : "Send airtime"}
+        onChange={() => setAirtime((current) => !current)}
+      />
+      <div className="grid gap-3 md:grid-cols-2">
+        <Input label="Collection maximum (minor units)" onChange={(event) => setCollectionMax(event.target.value)} value={collectionMax} />
+        <Input label="Payout maximum (minor units)" onChange={(event) => setPayoutMax(event.target.value)} value={payoutMax} />
+        <Input label="Airtime merchant daily cap (minor units)" onChange={(event) => setAirtimeMerchantCap(event.target.value)} value={airtimeMerchantCap} />
+        <Input label="Airtime number daily cap (minor units)" onChange={(event) => setAirtimeNumberCap(event.target.value)} value={airtimeNumberCap} />
+        <Input label="Airtime velocity per number" onChange={(event) => setAirtimeVelocity(event.target.value)} value={airtimeVelocity} />
+      </div>
+      <Input label="Reason" onChange={(event) => setReason(event.target.value)} value={reason} />
+      <Button
+        loading={saving}
+        onClick={() => {
+          if (!reason.trim() || saving) {
+            return;
+          }
+          setSaving(true);
+          void Promise.all([
+            apiRequest(`/admin/v1/merchants/${detail.id}/products`, {
+              accessToken,
+              body: JSON.stringify({
+                airtime_enabled: airtime,
+                collections_enabled: collections,
+                mode: detail.mode,
+                payouts_enabled: payouts,
+                reason,
+                sms_api_enabled: smsApi,
+                sms_broadcast_enabled: smsBroadcast
+              }),
+              method: "PUT"
+            }),
+            apiRequest(`/admin/v1/merchants/${detail.id}/limits`, {
+              accessToken,
+              body: JSON.stringify({
+                collections_max_minor: Number(collectionMax),
+                mode: detail.mode,
+                payouts_max_minor: Number(payoutMax),
+                reason
+              }),
+              method: "PUT"
+            }),
+            apiRequest(`/admin/v1/merchants/${detail.id}/airtime-limits`, {
+              accessToken,
+              body: JSON.stringify({
+                merchant_daily_cap_minor: Number(airtimeMerchantCap),
+                mode: detail.mode,
+                number_daily_cap_minor: Number(airtimeNumberCap),
+                reason,
+                velocity_per_number: Number(airtimeVelocity)
+              }),
+              method: "PUT"
+            })
+          ])
+            .then(() => {
+              pushToast({ description: "Product access and limits were saved.", title: "Merchant updated", variant: "success" });
+              onSaved();
+            })
+            .catch((error: unknown) => {
+              pushToast({
+                description: error instanceof ApiError ? error.message : "Unable to update this merchant.",
+                title: "Update failed",
+                variant: "danger"
+              });
+            })
+            .finally(() => setSaving(false));
+        }}
+        variant="primary"
+      >
+        Save products and limits
+      </Button>
+    </section>
+  );
+}
+
+function CreateAdminUserModal({
+  accessToken,
+  onCreated,
+  onOpenChange,
+  open
+}: {
+  accessToken: string;
+  onCreated: () => void;
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
+}) {
+  const { pushToast } = useToast();
+  const [email, setEmail] = React.useState("");
+  const [fullName, setFullName] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [role, setRole] = React.useState("operations");
+  const [saving, setSaving] = React.useState(false);
+
+  return (
+    <Modal onOpenChange={onOpenChange} open={open} title="Add admin user">
+      <div className="space-y-4">
+        <Input label="Full name" onChange={(event) => setFullName(event.target.value)} value={fullName} />
+        <Input label="Email" onChange={(event) => setEmail(event.target.value)} type="email" value={email} />
+        <Input label="Temporary password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
+        <Select
+          label="Role"
+          onValueChange={setRole}
+          options={[
+            { label: "Super admin", value: "super_admin" },
+            { label: "Compliance", value: "compliance" },
+            { label: "Operations", value: "operations" },
+            { label: "Finance", value: "finance" },
+            { label: "Support", value: "support" }
+          ]}
+          value={role}
+        />
+        <Button
+          loading={saving}
+          onClick={() => {
+            if (saving) return;
+            setSaving(true);
+            void apiRequest("/admin/v1/admin-users", {
+              accessToken,
+              body: JSON.stringify({ email, full_name: fullName, password, role }),
+              method: "POST"
+            })
+              .then(() => {
+                pushToast({ description: "The admin can sign in and enroll 2FA.", title: "Admin created", variant: "success" });
+                onOpenChange(false);
+                onCreated();
+              })
+              .catch((error: unknown) => {
+                pushToast({
+                  description: error instanceof ApiError ? error.message : "Unable to create the admin.",
+                  title: "Create admin failed",
+                  variant: "danger"
+                });
+              })
+              .finally(() => setSaving(false));
+          }}
+          variant="primary"
+        >
+          Create admin
+        </Button>
+      </div>
+    </Modal>
   );
 }

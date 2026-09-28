@@ -45,6 +45,8 @@ export type PayoutBatchStatus =
   | "processing"
   | "queued";
 export type CheckoutSessionStatus = "completed" | "expired" | "open";
+export type AirtimeOrderStatus = "failed" | "pending" | "processing" | "successful";
+export type AirtimeBatchStatus = "completed" | "processing";
 export type Json =
   | boolean
   | null
@@ -101,6 +103,12 @@ export interface SmsListOptions extends ListOptions {
   status?: SmsMessageStatus;
   to?: string;
   type?: SmsMessageType;
+}
+
+export interface AirtimeListOptions extends ListOptions {
+  batch_id?: string;
+  phone?: string;
+  status?: AirtimeOrderStatus;
 }
 
 export interface Collection {
@@ -406,6 +414,104 @@ export interface OtpVerifyParams {
   otp_id: string;
 }
 
+export interface AirtimeOrder {
+  amount: number;
+  batch_id: string | null;
+  charge_amount: number;
+  charge_currency: Currency;
+  completed_at: string | null;
+  country_code: string;
+  created_at: string;
+  currency: Currency;
+  discount_minor: number;
+  failure_code: string | null;
+  fx_rate_id: string | null;
+  id: string;
+  metadata: Record<string, Json>;
+  network: string;
+  phone: string;
+  reference: string | null;
+  status: AirtimeOrderStatus;
+}
+
+export interface AirtimeBatch {
+  accepted: number;
+  charge_currency: Currency;
+  completed_at: string | null;
+  created_at: string;
+  failed: number;
+  id: string;
+  reference: string | null;
+  rejected: number;
+  rejected_rows: Array<{
+    code: string;
+    index: number;
+    message: string;
+    phone: string | null;
+  }>;
+  status: AirtimeBatchStatus;
+  successful: number;
+  total_charge: number;
+  total_items: number;
+}
+
+export interface AirtimeQuote {
+  amount: number;
+  charge_amount: number;
+  charge_currency: Currency;
+  country_code: string;
+  currency: Currency;
+  discount_bps: number;
+  discount_minor: number;
+  fx_rate_id: string | null;
+  network: string;
+  phone: string;
+}
+
+export interface AirtimeNetwork {
+  country_code: string;
+  currency: Currency;
+  discount_bps: number;
+  fixed_denominations: number[] | null;
+  max_amount: number;
+  min_amount: number;
+  network: string;
+}
+
+export interface AirtimeSendParams {
+  amount: number;
+  currency: Currency;
+  metadata?: Record<string, Json>;
+  network?: string;
+  phone: string;
+  reference?: string;
+}
+
+export interface AirtimeBulkSharedParams {
+  amount: number;
+  currency?: Currency;
+  network?: string;
+  phones: string[];
+  reference?: string;
+}
+
+export interface AirtimeBulkItemsParams {
+  items: AirtimeSendParams[];
+  reference?: string;
+}
+
+export type AirtimeBulkParams = AirtimeBulkItemsParams | AirtimeBulkSharedParams;
+
+export interface AirtimeQuoteParams {
+  amount: number;
+  currency: Currency;
+  phone: string;
+}
+
+export interface AirtimeNetworkListOptions {
+  country?: string;
+}
+
 export interface CheckoutSessionCreateParams {
   allowed_methods: CheckoutMethod[];
   amount: number;
@@ -467,6 +573,8 @@ export function isRichesPayError(error: unknown): error is RichesPayError {
 }
 
 export class RichesPay {
+  readonly airtime: AirtimeResource;
+  readonly airtimeBatches: AirtimeBatchesResource;
   readonly checkout: {
     sessions: CheckoutSessionsResource;
   };
@@ -496,6 +604,8 @@ export class RichesPay {
     this.#fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.#userAgent = config.userAgent ?? "@richespay/node";
 
+    this.airtime = new AirtimeResource(this);
+    this.airtimeBatches = new AirtimeBatchesResource(this);
     this.collections = new CollectionsResource(this);
     this.payouts = new PayoutsResource(this);
     this.payoutBatches = new PayoutBatchesResource(this);
@@ -763,6 +873,96 @@ class SmsResource {
       idempotencyKey: options.idempotencyKey,
       method: "POST",
       path: "/v1/sms/bulk",
+      signal: options.signal
+    });
+    return envelope.data;
+  }
+}
+
+class AirtimeResource {
+  #client: RichesPay;
+
+  constructor(client: RichesPay) {
+    this.#client = client;
+  }
+
+  async send(params: AirtimeSendParams, options: RequestOptions = {}) {
+    const envelope = await this.#client.requestEnvelope<AirtimeOrder>({
+      body: params,
+      idempotencyKey: options.idempotencyKey,
+      method: "POST",
+      path: "/v1/airtime",
+      signal: options.signal
+    });
+    return envelope.data;
+  }
+
+  async bulk(params: AirtimeBulkParams, options: RequestOptions = {}) {
+    const envelope = await this.#client.requestEnvelope<AirtimeBatch>({
+      body: params,
+      idempotencyKey: options.idempotencyKey,
+      method: "POST",
+      path: "/v1/airtime/bulk",
+      signal: options.signal
+    });
+    return envelope.data;
+  }
+
+  async retrieve(orderId: string, options: RequestOptions = {}) {
+    const envelope = await this.#client.requestEnvelope<AirtimeOrder>({
+      method: "GET",
+      path: `/v1/airtime/${encodeURIComponent(orderId)}`,
+      signal: options.signal
+    });
+    return envelope.data;
+  }
+
+  async list(options: AirtimeListOptions = {}, requestOptions: RequestOptions = {}) {
+    const envelope = await this.#client.requestEnvelope<AirtimeOrder[]>({
+      method: "GET",
+      path: "/v1/airtime",
+      query: toQueryRecord(options),
+      signal: requestOptions.signal
+    });
+
+    return {
+      data: envelope.data,
+      meta: coercePaginationMeta(envelope.meta)
+    } satisfies ListResponse<AirtimeOrder>;
+  }
+
+  async networks(options: AirtimeNetworkListOptions = {}, requestOptions: RequestOptions = {}) {
+    const envelope = await this.#client.requestEnvelope<AirtimeNetwork[]>({
+      method: "GET",
+      path: "/v1/airtime/networks",
+      query: toQueryRecord(options),
+      signal: requestOptions.signal
+    });
+    return envelope.data;
+  }
+
+  async quote(params: AirtimeQuoteParams, options: RequestOptions = {}) {
+    const envelope = await this.#client.requestEnvelope<AirtimeQuote>({
+      method: "GET",
+      path: "/v1/airtime/quote",
+      query: toQueryRecord(params),
+      signal: options.signal
+    });
+    return envelope.data;
+  }
+}
+
+class AirtimeBatchesResource {
+  #client: RichesPay;
+
+  constructor(client: RichesPay) {
+    this.#client = client;
+  }
+
+  async retrieve(batchId: string, options: RequestOptions = {}) {
+    const envelope = await this.#client.requestEnvelope<AirtimeBatch>({
+      method: "GET",
+      path: `/v1/airtime/batches/${encodeURIComponent(batchId)}`,
       signal: options.signal
     });
     return envelope.data;

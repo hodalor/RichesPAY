@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { registerAdminPortalRoutes } from "../admin/portal-routes";
+import { registerAirtimeAdminRoutes } from "../airtime";
 import { adminAuthPlugin } from "../plugins/admin-auth";
 import { registerComplianceAdminRoutes } from "../compliance";
 import { registerPricingAdminRoutes } from "../pricing/admin-routes";
@@ -20,6 +21,7 @@ export async function registerAdminRoutes(app: FastifyTypedInstance) {
     await registerProviderAdminRoutes(protectedApp);
     await registerReconciliationAdminRoutes(protectedApp);
     await registerSmsAdminRoutes(protectedApp);
+    await registerAirtimeAdminRoutes(protectedApp);
     await registerTopupAdminRoutes(protectedApp);
 
     protectedApp.get(

@@ -570,6 +570,21 @@ export class ComplianceService {
     });
   }
 
+  async recordReviewFlag(
+    trx: ScopedTransaction,
+    input: {
+      merchantId: string;
+      mode: RpMode;
+      payload: Json;
+      resourceId: string;
+      resourceType: string;
+      ruleCode: string;
+      summary: string;
+    }
+  ) {
+    await this.#insertReviewFlag(trx, input);
+  }
+
   async screenMerchantOnboarding(input: {
     countryCode: string;
     merchantId: string;

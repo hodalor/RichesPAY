@@ -36,7 +36,13 @@ interface AuthContextValue {
   signOutEverywhere: () => Promise<void>;
 }
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 0
+    }
+  }
+});
 const adminIdleTimeoutMs = 30 * 60 * 1000;
 const lastActivityStorageKey = "richespay_admin_last_activity";
 
@@ -383,7 +389,13 @@ function TwoFactorPage() {
       <AdminAuthLayout subtitle="Checking your admin 2FA requirements." title="One moment">
         <div className="space-y-4">
           <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
-          <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
+          <Button
+            className="w-full"
+            onClick={() => void auth.signOutEverywhere()}
+            variant="secondary"
+          >
+            Sign out
+          </Button>
         </div>
       </AdminAuthLayout>
     );
@@ -444,7 +456,9 @@ function AdminWorkspacePage() {
   const auth = useAdminAuth();
   const { pushToast } = useToast();
   const [sessionData, setSessionData] = React.useState<AdminSessionData | null>(null);
+  const [failure, setFailure] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [attempt, setAttempt] = React.useState(0);
 
   React.useEffect(() => {
     if (!auth.accessToken) {
@@ -452,29 +466,47 @@ function AdminWorkspacePage() {
       return;
     }
 
+    let cancelled = false;
+    setLoading(true);
+    setFailure(null);
+
     void (async () => {
       try {
         const data = await apiRequest<AdminSessionData>("/admin/v1/session", {
           accessToken: auth.accessToken
         });
-        setSessionData(data);
+        if (!cancelled) {
+          setSessionData(data);
+        }
       } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
         if (error instanceof ApiError && error.code === "mfa_required") {
           window.location.assign("/2fa");
           return;
         }
 
+        const message =
+          error instanceof ApiError ? error.message : "Unable to load admin session";
+        setFailure(message);
         pushToast({
-          description:
-            error instanceof ApiError ? error.message : "Unable to load admin session",
+          description: message,
           title: "Admin access denied",
           variant: "danger"
         });
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     })();
-  }, [auth.accessToken, pushToast]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt, auth.accessToken, pushToast]);
 
   if (loading) {
     return (
@@ -482,7 +514,13 @@ function AdminWorkspacePage() {
         <div className="space-y-4">
           <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
           <div className="h-11 animate-pulse rounded-input bg-surface-subtle" />
-          <div className="h-40 animate-pulse rounded-card bg-surface-subtle" />
+          <Button
+            className="w-full"
+            onClick={() => void auth.signOutEverywhere()}
+            variant="secondary"
+          >
+            Sign out
+          </Button>
         </div>
       </AdminAuthLayout>
     );
@@ -491,14 +529,26 @@ function AdminWorkspacePage() {
   if (!sessionData || !auth.accessToken) {
     return (
       <AdminAuthLayout
-        subtitle="This account did not pass the admin access checks."
+        subtitle={failure ?? "This account did not pass the admin access checks."}
         title="Admin access unavailable"
       >
-        <EmptyState
-          description="This account did not pass the admin access checks."
-          icon={<LockKeyhole className="size-5" />}
-          title="Admin access unavailable"
-        />
+        <div className="space-y-4">
+          <EmptyState
+            description={failure ?? "This account did not pass the admin access checks."}
+            icon={<LockKeyhole className="size-5" />}
+            title="Admin access unavailable"
+          />
+          <Button className="w-full" onClick={() => setAttempt((current) => current + 1)} variant="primary">
+            Try again
+          </Button>
+          <Button
+            className="w-full"
+            onClick={() => void auth.signOutEverywhere()}
+            variant="secondary"
+          >
+            Sign out
+          </Button>
+        </div>
       </AdminAuthLayout>
     );
   }
@@ -529,6 +579,7 @@ const router = createBrowserRouter([
       { path: "/app/transactions", element: <AdminWorkspacePage /> },
       { path: "/app/reconciliation", element: <AdminWorkspacePage /> },
       { path: "/app/sender-ids", element: <AdminWorkspacePage /> },
+      { path: "/app/airtime", element: <AdminWorkspacePage /> },
       { path: "/app/pricing", element: <AdminWorkspacePage /> },
       { path: "/app/admin-users", element: <AdminWorkspacePage /> },
       { path: "/app/audit", element: <AdminWorkspacePage /> }
